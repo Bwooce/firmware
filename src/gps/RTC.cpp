@@ -1,4 +1,5 @@
 #include "RTC.h"
+#include "I2CLock.h"
 #include "configuration.h"
 #include "detect/ScanI2C.h"
 #include "main.h"
@@ -75,16 +76,26 @@ RTCSetResult readFromRTC()
 #elif defined(PCF85063_RTC)
     if (rtc_found.address == PCF85063_RTC) {
 #endif
+#ifdef USE_EINK_EPDIY
+        // Skip RTC I2C read on epdiy boards - epdiy's ESP-IDF I2C driver conflicts with Arduino Wire
+        LOG_DEBUG("PCF8563 readFromRTC SKIPPED (epdiy I2C conflict)");
+        return RTCSetResultNotSet;
+#else
         uint32_t now = millis();
         SensorRtcHelper rtc;
+        RTC_DateTime datetime;
 
+        // Hold I2C lock during RTC operations to prevent conflict with epdiy
+        {
+            concurrency::LockGuard guard(i2cLock);
 #if WIRE_INTERFACES_COUNT == 2
-        rtc.begin(rtc_found.port == ScanI2C::I2CPort::WIRE1 ? Wire1 : Wire);
+            rtc.begin(rtc_found.port == ScanI2C::I2CPort::WIRE1 ? Wire1 : Wire);
 #else
-        rtc.begin(Wire);
+            rtc.begin(Wire);
 #endif
+            datetime = rtc.getDateTime();
+        }
 
-        RTC_DateTime datetime = rtc.getDateTime();
         tm t = datetime.toUnixTime();
         tv.tv_sec = gm_mktime(&t);
         tv.tv_usec = 0;
@@ -108,6 +119,7 @@ RTCSetResult readFromRTC()
             currentQuality = RTCQualityDevice;
         }
         return RTCSetResultSuccess;
+#endif
     } else {
         LOG_WARN("RTC not found (found address 0x%02X)", rtc_found.address);
     }
@@ -243,17 +255,29 @@ RTCSetResult perhapsSetRTC(RTCQuality q, const struct timeval *tv, bool forceUpd
 #elif defined(PCF85063_RTC)
         if (rtc_found.address == PCF85063_RTC) {
 #endif
-            SensorRtcHelper rtc;
-
-#if WIRE_INTERFACES_COUNT == 2
-            rtc.begin(rtc_found.port == ScanI2C::I2CPort::WIRE1 ? Wire1 : Wire);
-#else
-            rtc.begin(Wire);
-#endif
+#ifdef USE_EINK_EPDIY
+            // Skip RTC I2C operations on epdiy boards - epdiy's ESP-IDF I2C driver conflicts
+            // with Arduino Wire. System time is synced from GPS, RTC hardware sync not needed.
             tm *t = gmtime(&tv->tv_sec);
-            rtc.setDateTime(*t);
+            LOG_DEBUG("PCF8563 setDateTime SKIPPED (epdiy I2C conflict) %02d-%02d-%02d %02d:%02d:%02d (%ld)",
+                      t->tm_year + 1900, t->tm_mon + 1, t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec, printableEpoch);
+#else
+            SensorRtcHelper rtc;
+            tm *t = gmtime(&tv->tv_sec);
+
+            // Hold I2C lock during RTC operations to prevent conflict with epdiy
+            {
+                concurrency::LockGuard guard(i2cLock);
+#if WIRE_INTERFACES_COUNT == 2
+                rtc.begin(rtc_found.port == ScanI2C::I2CPort::WIRE1 ? Wire1 : Wire);
+#else
+                rtc.begin(Wire);
+#endif
+                rtc.setDateTime(*t);
+            }
             LOG_DEBUG("%s setDateTime %02d-%02d-%02d %02d:%02d:%02d (%ld)", rtc.getChipName(), t->tm_year + 1900, t->tm_mon + 1,
                       t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec, printableEpoch);
+#endif
         } else {
             LOG_WARN("RTC not found (found address 0x%02X)", rtc_found.address);
         }

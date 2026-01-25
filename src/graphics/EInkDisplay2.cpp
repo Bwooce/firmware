@@ -1,6 +1,7 @@
 #include "configuration.h"
 
-#ifdef USE_EINK
+// Only compile for USE_EINK when NOT using EPDiy (which has its own driver)
+#if defined(USE_EINK) && !defined(USE_EINK_EPDIY)
 #include "EInkDisplay2.h"
 #include "SPILock.h"
 #include "main.h"

@@ -1,6 +1,7 @@
 #pragma once
 
-#ifdef USE_EINK
+// Only compile for USE_EINK when NOT using EPDiy (which has its own driver)
+#if defined(USE_EINK) && !defined(USE_EINK_EPDIY)
 
 #include "GxEPD2_BW.h"
 #include <OLEDDisplay.h>

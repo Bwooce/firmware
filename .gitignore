@@ -50,3 +50,4 @@ idf_component.yml
 CMakeLists.txt
 /sdkconfig.*
 .dummy/*
+lib/epdiy_upstream/

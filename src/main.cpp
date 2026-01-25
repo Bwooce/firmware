@@ -15,6 +15,7 @@
 #include "Led.h"
 #include "RTC.h"
 #include "SPILock.h"
+#include "I2CLock.h"
 #include "Throttle.h"
 #include "concurrency/OSThread.h"
 #include "concurrency/Periodic.h"
@@ -342,6 +343,9 @@ void printInfo()
 #ifndef PIO_UNIT_TESTING
 void setup()
 {
+    // Early serial init for ESP32-S3 USB CDC debugging
+    Serial.begin(115200);
+
 #if defined(R1_NEO)
     pinMode(DCDC_EN_HOLD, OUTPUT);
     digitalWrite(DCDC_EN_HOLD, HIGH);
@@ -583,6 +587,7 @@ void setup()
 #endif
 
     initSPI();
+    initI2CLock();
 
     OSThread::setup();
 
@@ -1581,6 +1586,8 @@ void setup()
 
     // We manually run this to update the NodeStatus
     nodeDB->notifyObservers(true);
+
+    LOG_INFO("=== SETUP COMPLETE === Now entering main loop");
 }
 
 #endif
@@ -1677,6 +1684,7 @@ void loop()
 #ifdef ARCH_NRF52
     nrf52Loop();
 #endif
+
     power->powerCommandsCheck();
 
 #ifdef DEBUG_STACK
@@ -1688,9 +1696,11 @@ void loop()
 #endif
 
     service->loop();
+
 #if !MESHTASTIC_EXCLUDE_INPUTBROKER && defined(HAS_FREE_RTOS) && !defined(ARCH_RP2040)
-    if (inputBroker)
+    if (inputBroker) {
         inputBroker->processInputEventQueue();
+    }
 #endif
 #if ARCH_PORTDUINO && HAS_TFT
     if (screen && portduino_config.displayPanel == x11 &&
@@ -1703,6 +1713,7 @@ void loop()
 #if HAS_SCREEN && ENABLE_MESSAGE_PERSISTENCE
     messageStoreAutosaveTick();
 #endif
+
     long delayMsec = mainController.runOrDelay();
 
     // We want to sleep as long as possible here - because it saves power
