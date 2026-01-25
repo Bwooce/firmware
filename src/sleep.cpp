@@ -145,16 +145,36 @@ void initDeepSleep()
     // If we booted because our timer ran out or the user pressed reset, send those as fake events
     RESET_REASON hwReason = rtc_get_reset_reason(0);
 
-    if (hwReason == RTCWDT_BROWN_OUT_RESET)
-        reason = "brownout";
-
-    if (hwReason == TG0WDT_SYS_RESET)
-        reason = "taskWatchdog";
-
-    if (hwReason == TG1WDT_SYS_RESET)
-        reason = "intWatchdog";
+    // Detailed reset reason logging for debugging
+    const char *hwReasonStr = "unknown";
+    switch (hwReason) {
+        case 1:  hwReasonStr = "POWERON"; break;
+        case 3:  hwReasonStr = "SW_RESET"; break;
+        case 4:  hwReasonStr = "OWDT_RESET"; break;
+        case 5:  hwReasonStr = "DEEPSLEEP"; break;
+        case 6:  hwReasonStr = "SDIO_RESET"; break;
+        case 7:  hwReasonStr = "TG0WDT_SYS"; reason = "taskWatchdog"; break;
+        case 8:  hwReasonStr = "TG1WDT_SYS"; reason = "intWatchdog"; break;
+        case 9:  hwReasonStr = "RTCWDT_SYS"; break;
+        case 10: hwReasonStr = "INTRUSION"; break;
+        case 11: hwReasonStr = "TG0WDT_CPU"; break;
+        case 12: hwReasonStr = "SW_CPU"; break;
+        case 13: hwReasonStr = "RTCWDT_CPU"; break;
+        case 14: hwReasonStr = "EXT_CPU"; break;
+        case 15: hwReasonStr = "RTCWDT_BROWN_OUT"; reason = "brownout"; break;
+        case 16: hwReasonStr = "RTCWDT_RTC"; break;
+        case 17: hwReasonStr = "TG1WDT_CPU"; break;
+        case 18: hwReasonStr = "SUPER_WDT"; break;
+        case 19: hwReasonStr = "GLITCH_RTC"; break;
+        case 20: hwReasonStr = "EFUSE"; break;
+        case 21: hwReasonStr = "USB_UART"; break;
+        case 22: hwReasonStr = "USB_JTAG"; break;
+        case 23: hwReasonStr = "POWER_GLITCH"; break;
+        default: break;
+    }
 
     LOG_INFO("Booted, wake cause %d (boot count %d), reset_reason=%s", wakeCause, bootCount, reason);
+    LOG_INFO("Hardware reset reason: %d (%s)", (int)hwReason, hwReasonStr);
 #endif
 
 #if SOC_RTCIO_HOLD_SUPPORTED

@@ -51,5 +51,7 @@ CMakeLists.txt
 /sdkconfig.*
 .dummy/*
 
+
 # PYTHONPATH used by the Nix shell
 .python3
+lib/epdiy_upstream/

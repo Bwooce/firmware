@@ -14,6 +14,7 @@
  * For more information, see: https://meshtastic.org/
  */
 #include "power.h"
+#include "I2CLock.h"
 #include "MessageStore.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
@@ -1400,7 +1401,9 @@ bool Power::lipoInit()
 class LipoCharger : public HasBatteryLevel
 {
   private:
+#ifdef HAS_BQ27220
     BQ27220 *bq = nullptr;
+#endif
 
   public:
     /**
@@ -1410,44 +1413,44 @@ class LipoCharger : public HasBatteryLevel
     {
         if (PPM == nullptr) {
             PPM = new XPowersPPM;
-            bool result = PPM->init(Wire, I2C_SDA, I2C_SCL, BQ25896_ADDR);
-            if (result) {
-                LOG_INFO("PPM BQ25896 init succeeded");
-                // Set the minimum operating voltage. Below this voltage, the PPM will
-                // protect PPM->setSysPowerDownVoltage(3100);
-
-                // Set input current limit, default is 500mA
-                // PPM->setInputCurrentLimit(800);
-
-                // Disable current limit pin
-                // PPM->disableCurrentLimitPin();
-
-                // Set the charging target voltage, Range:3840 ~ 4608mV ,step:16 mV
-                PPM->setChargeTargetVoltage(4288);
-
-                // Set the precharge current , Range: 64mA ~ 1024mA ,step:64mA
-                // PPM->setPrechargeCurr(64);
-
-                // The premise is that limit pin is disabled, or it will
-                // only follow the maximum charging current set by limit pin.
-                // Set the charging current , Range:0~5056mA ,step:64mA
-                PPM->setChargerConstantCurr(1024);
-
-                // To obtain voltage data, the ADC must be enabled first
-                PPM->enableMeasure();
-
-                // Turn on charging function
-                // If there is no battery connected, do not turn on the charging
-                // function
-                PPM->enableCharge();
-            } else {
+            bool result;
+            // Hold I2C lock during PPM initialization (epdiy shares I2C bus)
+            {
+                concurrency::LockGuard guard(i2cLock);
+                result = PPM->init(Wire, I2C_SDA, I2C_SCL, BQ25896_ADDR);
+                if (result) {
+                    LOG_INFO("PPM BQ25896 init succeeded");
+                    // Set the charging target voltage, Range:3840 ~ 4608mV ,step:16 mV
+                    PPM->setChargeTargetVoltage(4288);
+                    // Set the charging current , Range:0~5056mA ,step:64mA
+                    PPM->setChargerConstantCurr(1024);
+                    // To obtain voltage data, the ADC must be enabled first
+                    PPM->enableMeasure();
+                    // Turn on charging function
+                    PPM->enableCharge();
+                }
+            }
+            if (!result) {
                 LOG_WARN("PPM BQ25896 init failed");
                 delete PPM;
                 PPM = nullptr;
                 return false;
             }
         }
+#ifdef HAS_BQ27220
         if (bq == nullptr) {
+            // Hold I2C lock during BQ27220 operations
+            concurrency::LockGuard guard(i2cLock);
+            // First check if BQ27220 is present on I2C bus before attempting init
+            // The init() method has no timeout and will hang forever if device doesn't respond
+            Wire.beginTransmission(0x55); // BQ27220 I2C address
+            uint8_t i2cError = Wire.endTransmission();
+            if (i2cError != 0) {
+                LOG_WARN("BQ27220 not detected on I2C bus (error %d), skipping fuel gauge init", i2cError);
+                // Still return true since PPM (charger) is working
+                return true;
+            }
+
             bq = new BQ27220;
             bq->setDefaultCapacity(BQ27220_DESIGN_CAPACITY);
 
@@ -1461,10 +1464,12 @@ class LipoCharger : public HasBatteryLevel
                 LOG_WARN("BQ27220 init failed");
                 delete bq;
                 bq = nullptr;
-                return false;
+                // Still return true since PPM (charger) is working
+                return true;
             }
         }
-        return false;
+#endif
+        return true;
     }
 
     /**
@@ -1480,32 +1485,55 @@ class LipoCharger : public HasBatteryLevel
     /**
      * The raw voltage of the battery in millivolts, or NAN if unknown
      */
-    virtual uint16_t getBattVoltage() override { return bq->getVoltage(); }
+    virtual uint16_t getBattVoltage() override
+    {
+        concurrency::LockGuard guard(i2cLock);
+#ifdef HAS_BQ27220
+        return bq ? bq->getVoltage() : (PPM ? PPM->getBattVoltage() : 0);
+#else
+        return PPM ? PPM->getBattVoltage() : 0;
+#endif
+    }
 
     /**
      * return true if there is a battery installed in this unit
      */
-    virtual bool isBatteryConnect() override { return PPM->getBattVoltage() > 0; }
+    virtual bool isBatteryConnect() override
+    {
+        concurrency::LockGuard guard(i2cLock);
+        return PPM ? PPM->getBattVoltage() > 0 : false;
+    }
 
     /**
      * return true if there is an external power source detected
      */
-    virtual bool isVbusIn() override { return PPM->isVbusIn(); }
+    virtual bool isVbusIn() override
+    {
+        concurrency::LockGuard guard(i2cLock);
+        return PPM ? PPM->isVbusIn() : false;
+    }
 
     /**
      * return true if the battery is currently charging
      */
     virtual bool isCharging() override
     {
-        bool isCharging = PPM->isCharging();
-        if (isCharging) {
-            LOG_DEBUG("BQ27220 time to full charge: %d min", bq->getTimeToFull());
-        } else {
-            if (!PPM->isVbusIn()) {
-                LOG_DEBUG("BQ27220 time to empty: %d min (%d mAh)", bq->getTimeToEmpty(), bq->getRemainingCapacity());
+        concurrency::LockGuard guard(i2cLock);
+        if (!PPM)
+            return false;
+        bool charging = PPM->isCharging();
+#ifdef HAS_BQ27220
+        if (bq) {
+            if (charging) {
+                LOG_DEBUG("BQ27220 time to full charge: %d min", bq->getTimeToFull());
+            } else {
+                if (!PPM->isVbusIn()) {
+                    LOG_DEBUG("BQ27220 time to empty: %d min (%d mAh)", bq->getTimeToEmpty(), bq->getRemainingCapacity());
+                }
             }
         }
-        return isCharging;
+#endif
+        return charging;
     }
 };
 

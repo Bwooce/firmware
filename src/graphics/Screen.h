@@ -87,8 +87,12 @@ class Screen
 #include <AutoOLEDWire.h>
 #endif
 
+#ifdef USE_EINK_EPDIY
+#include "EInkDisplayEPDiy.h"
+#else
 #include "EInkDisplay2.h"
 #include "EInkDynamicDisplay.h"
+#endif
 #include "PointStruct.h"
 #include "TFTDisplay.h"
 #include "TypedQueue.h"

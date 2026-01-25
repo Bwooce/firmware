@@ -364,6 +364,11 @@ Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_O
     defined(RAK14014) || defined(HX8357_CS) || defined(ILI9488_CS) || defined(ST7796_CS) || defined(HACKADAY_COMMUNICATOR)
     dispdev = new TFTDisplay(address.address, -1, -1, geometry,
                              (address.port == ScanI2C::I2CPort::WIRE1) ? HW_I2C::I2C_TWO : HW_I2C::I2C_ONE);
+#elif defined(USE_EINK_EPDIY)
+    // LilyGo T5 S3 E-Paper Pro and similar parallel-interface EPD displays
+    // Uses epdiy library instead of GxEPD2
+    dispdev = new EInkDisplayEPDiy(address.address, -1, -1, geometry,
+                                   (address.port == ScanI2C::I2CPort::WIRE1) ? HW_I2C::I2C_TWO : HW_I2C::I2C_ONE);
 #elif defined(USE_EINK) && !defined(USE_EINK_DYNAMICDISPLAY)
     dispdev = new EInkDisplay(address.address, -1, -1, geometry,
                               (address.port == ScanI2C::I2CPort::WIRE1) ? HW_I2C::I2C_TWO : HW_I2C::I2C_ONE);
@@ -750,7 +755,11 @@ void Screen::forceDisplay(bool forceUiUpdate)
     }
 
     // Tell EInk class to update the display
+#ifdef USE_EINK_EPDIY
+    static_cast<EInkDisplayEPDiy *>(dispdev)->forceDisplay();
+#else
     static_cast<EInkDisplay *>(dispdev)->forceDisplay();
+#endif
 #else
     // No delay between UI frame rendering
     if (forceUiUpdate) {
@@ -987,7 +996,11 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
 
     // Old EInkDisplay class
 #if !defined(USE_EINK_DYNAMICDISPLAY)
+#ifdef USE_EINK_EPDIY
+    static_cast<EInkDisplayEPDiy *>(dispdev)->forceDisplay(0); // Screen::forceDisplay(), but override rate-limit
+#else
     static_cast<EInkDisplay *>(dispdev)->forceDisplay(0); // Screen::forceDisplay(), but override rate-limit
+#endif
 #endif
 
     // Prepare now for next frame, shown when display wakes
