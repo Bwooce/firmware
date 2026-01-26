@@ -29,8 +29,8 @@ namespace graphics
 namespace NodeListRenderer
 {
 
-// Function moved from Screen.cpp to NodeListRenderer.cpp since it's primarily used here
-void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *bitmapXBM, OLEDDisplay *display)
+// General-purpose scaled bitmap drawing with variable scale factor
+void drawScaledXBitmap(int x, int y, int width, int height, const uint8_t *bitmapXBM, OLEDDisplay *display, int scale)
 {
     for (int row = 0; row < height; row++) {
         uint8_t rowMask = (1 << row);
@@ -38,10 +38,29 @@ void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *
             uint8_t colData = pgm_read_byte(&bitmapXBM[col]);
             if (colData & rowMask) {
                 // Note: rows become X, columns become Y after transpose
-                display->fillRect(x + row * 2, y + col * 2, 2, 2);
+                display->fillRect(x + row * scale, y + col * scale, scale, scale);
             }
         }
     }
+}
+
+// Returns appropriate icon scale factor for current resolution
+// High = 2x, Large = 3x
+int getIconScale()
+{
+    if (currentResolution == ScreenResolution::Large)
+        return 3;
+    if (currentResolution >= ScreenResolution::High)
+        return 2;
+    return 1;
+}
+
+// Function moved from Screen.cpp to NodeListRenderer.cpp since it's primarily used here
+// Uses 2x scale for High, 3x scale for Large screens
+void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *bitmapXBM, OLEDDisplay *display)
+{
+    int scale = getIconScale();
+    drawScaledXBitmap(x, y, width, height, bitmapXBM, display, scale);
 }
 
 // Static variables for dynamic cycling
@@ -107,7 +126,7 @@ const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node,
 
     // 4) Width-based truncation + ellipsis (long-name mode only)
     if (config.display.use_long_node_name && display) {
-        int availWidth = columnWidth - ((currentResolution == ScreenResolution::High) ? 65 : 38);
+        int availWidth = columnWidth - ((currentResolution >= ScreenResolution::High) ? 65 : 38);
         if (availWidth < 0)
             availWidth = 0;
 
@@ -144,7 +163,7 @@ const char *getCurrentModeTitle_Nodes(int screenWidth)
 #ifdef USE_EINK
         return "Hops/Sig";
 #else
-        return (currentResolution == ScreenResolution::High) ? "Hops/Signal" : "Hops/Sig";
+        return (currentResolution >= ScreenResolution::High) ? "Hops/Signal" : "Hops/Sig";
 #endif
     default:
         return "Nodes";
@@ -176,7 +195,7 @@ int calculateMaxScroll(int totalEntries, int visibleRows)
 
 void drawColumnSeparator(OLEDDisplay *display, int16_t x, int16_t yStart, int16_t yEnd)
 {
-    x = (currentResolution == ScreenResolution::High) ? x - 2 : (currentResolution == ScreenResolution::Low) ? x - 1 : x;
+    x = (currentResolution >= ScreenResolution::High) ? x - 2 : (currentResolution == ScreenResolution::Low) ? x - 1 : x;
     for (int y = yStart; y <= yEnd; y += 2) {
         display->setPixel(x, y);
     }
@@ -207,7 +226,7 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
 {
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
     int nameMaxWidth = columnWidth - 25;
-    int timeOffset = (currentResolution == ScreenResolution::High) ? (isLeftCol ? 7 : 10) : (isLeftCol ? 3 : 7);
+    int timeOffset = (currentResolution >= ScreenResolution::High) ? (isLeftCol ? 7 : 10) : (isLeftCol ? 3 : 7);
 
     const char *nodeName = getSafeNodeName(display, node, columnWidth);
     bool isMuted = (node->bitfield & NODEINFO_BITFIELD_IS_MUTED_MASK) != 0;
@@ -229,16 +248,21 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
-    display->drawString(x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y, nodeName);
+    int textIndent = (currentResolution == ScreenResolution::Large) ? 14 : (currentResolution >= ScreenResolution::High) ? 6 : 3;
+    display->drawString(x + textIndent, y, nodeName);
     if (node->is_favorite) {
-        if (currentResolution == ScreenResolution::High) {
+        if (currentResolution == ScreenResolution::Large) {
+            drawScaledXBitmap16x16(x, y + 8, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
+        } else if (currentResolution >= ScreenResolution::High) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
         }
     }
     if (node->is_ignored || isMuted) {
-        if (currentResolution == ScreenResolution::High) {
+        if (currentResolution == ScreenResolution::Large) {
+            display->drawLine(x + 16, y + 12, (isLeftCol ? 0 : x - 6) + nameMaxWidth - 20, y + 12);
+        } else if (currentResolution >= ScreenResolution::High) {
             display->drawLine(x + 8, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
         } else {
             display->drawLine(x + 4, y + 6, (isLeftCol ? 0 : x - 3) + nameMaxWidth - 4, y + 6);
@@ -257,8 +281,8 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
 
     int nameMaxWidth = columnWidth - 25;
-    int barsOffset = (currentResolution == ScreenResolution::High) ? (isLeftCol ? 20 : 24) : (isLeftCol ? 15 : 19);
-    int hopOffset = (currentResolution == ScreenResolution::High) ? (isLeftCol ? 21 : 29) : (isLeftCol ? 13 : 17);
+    int barsOffset = (currentResolution >= ScreenResolution::High) ? (isLeftCol ? 20 : 24) : (isLeftCol ? 15 : 19);
+    int hopOffset = (currentResolution >= ScreenResolution::High) ? (isLeftCol ? 21 : 29) : (isLeftCol ? 13 : 17);
 
     int barsXOffset = columnWidth - barsOffset;
 
@@ -268,16 +292,21 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
 
-    display->drawStringMaxWidth(x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y, nameMaxWidth, nodeName);
+    int textIndent = (currentResolution == ScreenResolution::Large) ? 14 : (currentResolution >= ScreenResolution::High) ? 6 : 3;
+    display->drawStringMaxWidth(x + textIndent, y, nameMaxWidth, nodeName);
     if (node->is_favorite) {
-        if (currentResolution == ScreenResolution::High) {
+        if (currentResolution == ScreenResolution::Large) {
+            drawScaledXBitmap16x16(x, y + 8, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
+        } else if (currentResolution >= ScreenResolution::High) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
         }
     }
     if (node->is_ignored || isMuted) {
-        if (currentResolution == ScreenResolution::High) {
+        if (currentResolution == ScreenResolution::Large) {
+            display->drawLine(x + 16, y + 12, (isLeftCol ? 0 : x - 6) + nameMaxWidth - 20, y + 12);
+        } else if (currentResolution >= ScreenResolution::High) {
             display->drawLine(x + 8, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
         } else {
             display->drawLine(x + 4, y + 6, (isLeftCol ? 0 : x - 3) + nameMaxWidth - 4, y + 6);
@@ -313,7 +342,7 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
 {
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
     int nameMaxWidth =
-        columnWidth - ((currentResolution == ScreenResolution::High) ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
+        columnWidth - ((currentResolution >= ScreenResolution::High) ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
 
     const char *nodeName = getSafeNodeName(display, node, columnWidth);
     bool isMuted = (node->bitfield & NODEINFO_BITFIELD_IS_MUTED_MASK) != 0;
@@ -369,16 +398,21 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
-    display->drawStringMaxWidth(x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y, nameMaxWidth, nodeName);
+    int textIndent = (currentResolution == ScreenResolution::Large) ? 14 : (currentResolution >= ScreenResolution::High) ? 6 : 3;
+    display->drawStringMaxWidth(x + textIndent, y, nameMaxWidth, nodeName);
     if (node->is_favorite) {
-        if (currentResolution == ScreenResolution::High) {
+        if (currentResolution == ScreenResolution::Large) {
+            drawScaledXBitmap16x16(x, y + 8, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
+        } else if (currentResolution >= ScreenResolution::High) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
         }
     }
     if (node->is_ignored || isMuted) {
-        if (currentResolution == ScreenResolution::High) {
+        if (currentResolution == ScreenResolution::Large) {
+            display->drawLine(x + 16, y + 12, (isLeftCol ? 0 : x - 6) + nameMaxWidth - 20, y + 12);
+        } else if (currentResolution >= ScreenResolution::High) {
             display->drawLine(x + 8, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
         } else {
             display->drawLine(x + 4, y + 6, (isLeftCol ? 0 : x - 3) + nameMaxWidth - 4, y + 6);
@@ -386,7 +420,7 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     }
 
     if (strlen(distStr) > 0) {
-        int offset = (currentResolution == ScreenResolution::High)
+        int offset = (currentResolution >= ScreenResolution::High)
                          ? (isLeftCol ? 7 : 10) // Offset for Wide Screens (Left Column:Right Column)
                          : (isLeftCol ? 4 : 7); // Offset for Narrow Screens (Left Column:Right Column)
         int rightEdge = x + columnWidth - offset;
@@ -415,23 +449,28 @@ void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
 
     // Adjust max text width depending on column and screen width
     int nameMaxWidth =
-        columnWidth - ((currentResolution == ScreenResolution::High) ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
+        columnWidth - ((currentResolution >= ScreenResolution::High) ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
 
     const char *nodeName = getSafeNodeName(display, node, columnWidth);
     bool isMuted = (node->bitfield & NODEINFO_BITFIELD_IS_MUTED_MASK) != 0;
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
-    display->drawStringMaxWidth(x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y, nameMaxWidth, nodeName);
+    int textIndent = (currentResolution == ScreenResolution::Large) ? 14 : (currentResolution >= ScreenResolution::High) ? 6 : 3;
+    display->drawStringMaxWidth(x + textIndent, y, nameMaxWidth, nodeName);
     if (node->is_favorite) {
-        if (currentResolution == ScreenResolution::High) {
+        if (currentResolution == ScreenResolution::Large) {
+            drawScaledXBitmap16x16(x, y + 8, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
+        } else if (currentResolution >= ScreenResolution::High) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
         }
     }
     if (node->is_ignored || isMuted) {
-        if (currentResolution == ScreenResolution::High) {
+        if (currentResolution == ScreenResolution::Large) {
+            display->drawLine(x + 16, y + 12, (isLeftCol ? 0 : x - 6) + nameMaxWidth - 20, y + 12);
+        } else if (currentResolution >= ScreenResolution::High) {
             display->drawLine(x + 8, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
         } else {
             display->drawLine(x + 4, y + 6, (isLeftCol ? 0 : x - 3) + nameMaxWidth - 4, y + 6);
@@ -446,7 +485,7 @@ void drawCompassArrow(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
         return;
 
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
-    int arrowXOffset = (currentResolution == ScreenResolution::High) ? (isLeftCol ? 22 : 24) : (isLeftCol ? 12 : 18);
+    int arrowXOffset = (currentResolution >= ScreenResolution::High) ? (isLeftCol ? 22 : 24) : (isLeftCol ? 12 : 18);
 
     int centerX = x + columnWidth - arrowXOffset;
     int centerY = y + FONT_HEIGHT_SMALL / 2;

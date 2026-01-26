@@ -63,8 +63,10 @@ void drawColumns(OLEDDisplay *display, int16_t x, int16_t y, const char **fields
 void scrollUp();
 void scrollDown();
 
-// Bitmap drawing function
+// Bitmap drawing functions
+void drawScaledXBitmap(int x, int y, int width, int height, const uint8_t *bitmapXBM, OLEDDisplay *display, int scale);
 void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *bitmapXBM, OLEDDisplay *display);
+int getIconScale();  // Returns 1 for Low, 2 for High, 3 for Large
 
 } // namespace NodeListRenderer
 
