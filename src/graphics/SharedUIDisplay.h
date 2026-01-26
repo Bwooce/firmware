@@ -27,13 +27,14 @@ namespace graphics
 #define textFifthLine_medium (textFourthLine_medium + FONT_HEIGHT_SMALL)
 #define textSixthLine_medium (textFifthLine_medium + FONT_HEIGHT_SMALL)
 
-// Consistent Line Spacing for devices like VisionMaster T190
-#define textFirstLine_large (FONT_HEIGHT_SMALL + 1)
-#define textSecondLine_large (textFirstLine_large + (FONT_HEIGHT_SMALL + 5))
-#define textThirdLine_large (textSecondLine_large + (FONT_HEIGHT_SMALL + 5))
-#define textFourthLine_large (textThirdLine_large + (FONT_HEIGHT_SMALL + 5))
-#define textFifthLine_large (textFourthLine_large + (FONT_HEIGHT_SMALL + 5))
-#define textSixthLine_large (textFifthLine_large + (FONT_HEIGHT_SMALL + 5))
+// Consistent Line Spacing for Large screens (>400px width, e.g. LilyGo T5 S3 E-Paper Pro)
+// Scaled from standard spacing for large e-ink displays
+#define textFirstLine_large (FONT_HEIGHT_SMALL * 2)
+#define textSecondLine_large (textFirstLine_large + (FONT_HEIGHT_SMALL * 2))
+#define textThirdLine_large (textSecondLine_large + (FONT_HEIGHT_SMALL * 2))
+#define textFourthLine_large (textThirdLine_large + (FONT_HEIGHT_SMALL * 2))
+#define textFifthLine_large (textFourthLine_large + (FONT_HEIGHT_SMALL * 2))
+#define textSixthLine_large (textFifthLine_large + (FONT_HEIGHT_SMALL * 2))
 
 // Quick screen access
 #define SCREEN_WIDTH display->getWidth()
@@ -41,7 +42,7 @@ namespace graphics
 
 // Shared state (declare inside namespace)
 extern bool hasUnreadMessage;
-enum class ScreenResolution : uint8_t { UltraLow = 0, Low = 1, High = 2 };
+enum class ScreenResolution : uint8_t { UltraLow = 0, Low = 1, High = 2, Large = 3 };
 extern ScreenResolution currentResolution;
 ScreenResolution determineScreenResolution(int16_t screenheight, int16_t screenwidth);
 

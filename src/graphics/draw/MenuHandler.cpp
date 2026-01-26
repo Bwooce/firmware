@@ -1681,7 +1681,7 @@ void menuHandler::GPSFormatMenu()
     BannerOverlayOptions bannerOptions;
     int initialSelection = 0;
 
-    if (currentResolution == ScreenResolution::High) {
+    if (currentResolution >= ScreenResolution::High) {
         bannerOptions = createStaticBannerOptions("GPS Format", formatOptionsHigh, formatLabelsHigh, onSelection);
         for (size_t i = 0; i < formatCount; ++i) {
             if (formatOptionsHigh[i].hasValue && uiconfig.gps_format == formatOptionsHigh[i].value) {

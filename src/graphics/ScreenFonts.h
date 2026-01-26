@@ -115,6 +115,17 @@
 #define FONT_LARGE Monospaced_plain_30
 #endif
 
+// LilyGo T5 S3 E-Paper Pro: Large screen (540x960) needs larger fonts
+#if defined(LILYGO_T5_S3_EPAPER_PRO) && defined(USE_EINK_EPDIY)
+#include "graphics/fonts/EinkDisplayFonts.h"
+#undef FONT_SMALL
+#undef FONT_MEDIUM
+#undef FONT_LARGE
+#define FONT_SMALL FONT_LARGE_LOCAL       // ArialMT_Plain_24 (28px) as small
+#define FONT_MEDIUM Monospaced_plain_30   // 30px as medium
+#define FONT_LARGE Monospaced_plain_30    // 30px as large (may add larger font later)
+#endif
+
 #define _fontHeight(font) ((font)[1] + 1) // height is position 1
 
 #define FONT_HEIGHT_SMALL _fontHeight(FONT_SMALL)

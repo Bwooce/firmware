@@ -3,6 +3,7 @@
 #if HAS_SCREEN
 #include "DisplayFormatters.h"
 #include "NodeDB.h"
+#include "NodeListRenderer.h"
 #include "NotificationRenderer.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
@@ -243,7 +244,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     static uint32_t selectedNodenum = 0;
 
     // === Layout Configuration ===
-    constexpr uint16_t vPadding = 2;
+    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 6 : 2;
     alertBannerOptions = nodeDB->getNumMeshNodes() - 1;
 
     // let the box drawing function calculate the widths?
@@ -290,7 +291,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
 
     uint16_t totalLines = lineCount + alertBannerOptions;
     uint16_t screenHeight = display->height();
-    uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL + 2 : FONT_HEIGHT_SMALL - 3;
     uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
@@ -321,7 +322,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
         }
         if (i == curSelected) {
             selectedNodenum = nodeDB->getMeshNodeByIndex(i + 1)->num;
-            if (currentResolution == ScreenResolution::High) {
+            if (currentResolution >= ScreenResolution::High) {
                 strncpy(scratchLineBuffer[scratchLineNum], "> ", 3);
                 strncpy(scratchLineBuffer[scratchLineNum] + 2, temp_name, 36);
                 strncpy(scratchLineBuffer[scratchLineNum] + strlen(temp_name) + 2, " <", 3);
@@ -343,7 +344,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
 void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
     // === Layout Configuration ===
-    constexpr uint16_t vPadding = 2;
+    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 6 : 2;
 
     uint16_t optionWidths[alertBannerOptions] = {0};
     uint16_t maxWidth = 0;
@@ -420,7 +421,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     uint16_t totalLines = lineCount + alertBannerOptions;
 
     uint16_t screenHeight = display->height();
-    uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL + 2 : FONT_HEIGHT_SMALL - 3;
     uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
@@ -449,7 +450,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
 
     for (int i = firstOptionToShow; i < alertBannerOptions && linesShown < visibleTotalLines; i++, linesShown++) {
         if (i == curSelected) {
-            if (currentResolution == ScreenResolution::High) {
+            if (currentResolution >= ScreenResolution::High) {
                 strncpy(lineBuffer, "> ", 3);
                 strncpy(lineBuffer + 2, optionsArrayPtr[i], 36);
                 strncpy(lineBuffer + strlen(optionsArrayPtr[i]) + 2, " <", 3);
@@ -477,9 +478,9 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
 
     bool is_picker = false;
     uint16_t lineCount = 0;
-    // Layout Configuration
-    constexpr uint16_t hPadding = 5;
-    constexpr uint16_t vPadding = 2;
+    // Layout Configuration - scale padding for Large screens
+    const uint16_t hPadding = (currentResolution == ScreenResolution::Large) ? 10 : 5;
+    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 6 : 2;
     bool needs_bell = false;
     uint16_t lineWidths[totalLines] = {0};
     uint16_t lineLengths[totalLines] = {0};
@@ -533,27 +534,27 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     uint16_t boxWidth = hPadding * 2 + maxWidth;
 
     if (needs_bell) {
-        if ((currentResolution == ScreenResolution::High) && boxWidth <= 150)
+        if ((currentResolution >= ScreenResolution::High) && boxWidth <= 150)
             boxWidth += 26;
         if ((currentResolution == ScreenResolution::Low || currentResolution == ScreenResolution::UltraLow) && boxWidth <= 100)
             boxWidth += 20;
     }
 
     uint16_t screenHeight = display->height();
-    uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL + 2 : FONT_HEIGHT_SMALL - 3;
     uint8_t visibleTotalLines = std::min<uint8_t>(lineCount, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint16_t contentHeight = visibleTotalLines * effectiveLineHeight;
     uint16_t boxHeight = contentHeight + vPadding * 2;
     if (visibleTotalLines == 1) {
-        boxHeight += (currentResolution == ScreenResolution::High) ? 4 : 3;
+        boxHeight += (currentResolution >= ScreenResolution::High) ? 4 : 3;
     }
 
     int16_t boxLeft = (display->width() / 2) - (boxWidth / 2);
     if (totalLines > visibleTotalLines) {
-        boxWidth += (currentResolution == ScreenResolution::High) ? 4 : 2;
+        boxWidth += (currentResolution >= ScreenResolution::High) ? 4 : 2;
     }
     int16_t boxTop = (display->height() / 2) - (boxHeight / 2);
-    boxHeight += (currentResolution == ScreenResolution::High) ? 2 : 1;
+    boxHeight += (currentResolution >= ScreenResolution::High) ? 2 : 1;
 #if defined(M5STACK_UNITC6L)
     if (visibleTotalLines == 1) {
         boxTop += 25;
@@ -588,9 +589,16 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     for (int i = 0; i < lineCount; i++) {
         int16_t textX = boxLeft + (boxWidth - lineWidths[i]) / 2;
         if (needs_bell && i == 0) {
-            int bellY = lineY + (FONT_HEIGHT_SMALL - 8) / 2;
-            display->drawXbm(textX - 10, bellY, 8, 8, bell_alert);
-            display->drawXbm(textX + lineWidths[i] + 2, bellY, 8, 8, bell_alert);
+            int scale = NodeListRenderer::getIconScale();
+            int bellSize = 8 * scale;
+            int bellY = lineY + (FONT_HEIGHT_SMALL - bellSize) / 2;
+            if (scale > 1) {
+                NodeListRenderer::drawScaledXBitmap(textX - bellSize - 2, bellY, 8, 8, bell_alert, display, scale);
+                NodeListRenderer::drawScaledXBitmap(textX + lineWidths[i] + 2, bellY, 8, 8, bell_alert, display, scale);
+            } else {
+                display->drawXbm(textX - 10, bellY, 8, 8, bell_alert);
+                display->drawXbm(textX + lineWidths[i] + 2, bellY, 8, 8, bell_alert);
+            }
         }
         char lineBuffer[lineLengths[i] + 1];
         strncpy(lineBuffer, lines[i], lineLengths[i]);
