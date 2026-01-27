@@ -18,6 +18,8 @@
 #ifdef LILYGO_T5_S3_EPAPER_PRO
 
 #include "I2CLock.h"
+#include "concurrency/OSThread.h"
+#include "input/InputBroker.h"
 #include "input/TouchScreenImpl1.h"
 #include <Wire.h>
 #include <TouchDrvGT911.hpp>
@@ -26,53 +28,122 @@
 #define GT911_INT_PIN   3
 #define GT911_RST_PIN   9
 
+// PCA9535 IO expander registers
+#define PCA9535_ADDR 0x20
+#define PCA9535_REG_INPUT_PORT1 0x01
+#define PCA9535_P12_BIT 0x04  // Bit 2 of port 1 = P12 (PWR button)
+
 // GT911 touch driver instance
 static TouchDrvGT911 touchDriver;
 static bool touchInitialized = false;
 
 /**
+ * PWR button handler via PCA9535 IO expander
+ *
+ * Detects PWR button press via PCA9535 P12 input pin.
+ * PCA9535 interrupt (GPIO 38) fires LOW on any port input change.
+ * Polls at 50ms; only reads I2C when interrupt pending or button held.
+ *
+ * Short press (<1s) = toggle screen on/off (INPUT_BROKER_CANCEL)
+ * Long press (>=1s) = software shutdown (INPUT_BROKER_SHUTDOWN)
+ */
+class PCA9535ButtonThread : public Observable<const InputEvent *>, public concurrency::OSThread
+{
+  public:
+    PCA9535ButtonThread() : OSThread("PCA9535Btn")
+    {
+        if (inputBroker)
+            inputBroker->registerSource(this);
+    }
+
+    int32_t runOnce() override
+    {
+        bool needRead = false;
+
+        // Check for new PCA9535 events (GPIO 38 LOW = pending input change)
+        if (digitalRead(PCA9535_INT) == LOW) {
+            needRead = true;
+        }
+        // Continue polling I2C while button is held to detect release
+        if (btnPressed) {
+            needRead = true;
+        }
+
+        if (needRead) {
+            uint8_t port1_val = 0xFF;
+            {
+                concurrency::LockGuard guard(i2cLock);
+                Wire.beginTransmission(PCA9535_ADDR);
+                Wire.write(PCA9535_REG_INPUT_PORT1);
+                Wire.endTransmission();
+                if (Wire.requestFrom((uint8_t)PCA9535_ADDR, (uint8_t)1) == 1) {
+                    port1_val = Wire.read();
+                }
+            }
+            // P12 is active LOW: bit clear = pressed
+            bool pressed = !(port1_val & PCA9535_P12_BIT);
+
+            if (pressed && !btnPressed) {
+                btnPressed = true;
+                pressStartTime = millis();
+                longPressTriggered = false;
+                LOG_DEBUG("PWR button pressed (PCA9535 P12)");
+            } else if (!pressed && btnPressed) {
+                btnPressed = false;
+                uint32_t duration = millis() - pressStartTime;
+                LOG_DEBUG("PWR button released after %lu ms", (unsigned long)duration);
+                if (!longPressTriggered && duration < LONG_PRESS_TIME) {
+                    InputEvent evt = {};
+                    evt.source = "pwrBtn";
+                    evt.inputEvent = INPUT_BROKER_CANCEL;
+                    this->notifyObservers(&evt);
+                }
+            }
+        }
+
+        // Long press detection while button is held
+        if (btnPressed && !longPressTriggered && (millis() - pressStartTime >= LONG_PRESS_TIME)) {
+            longPressTriggered = true;
+            LOG_INFO("PWR button long press - shutdown");
+            InputEvent evt = {};
+            evt.source = "pwrBtn";
+            evt.inputEvent = INPUT_BROKER_SHUTDOWN;
+            this->notifyObservers(&evt);
+        }
+
+        return 50;  // Poll every 50ms
+    }
+
+  private:
+    static const uint32_t LONG_PRESS_TIME = 1000;
+    bool btnPressed = false;
+    uint32_t pressStartTime = 0;
+    bool longPressTriggered = false;
+};
+
+static PCA9535ButtonThread *pwrButtonThread = nullptr;
+
+/**
  * Read touch point callback for TouchScreenImpl1
  *
- * Returns true if screen is being touched, with coordinates in x,y
+ * Returns true if screen is being touched, with coordinates in x,y.
+ * Called at 20-100ms intervals by TouchScreenBase::runOnce().
  */
 bool readTouch(int16_t *x, int16_t *y)
 {
-    static uint32_t callCount = 0;
-    static uint32_t lastLog = 0;
-    static bool firstCall = true;
-
-    if (firstCall) {
-        LOG_INFO("GT911: readTouch first call");
-        firstCall = false;
-    }
-
-    callCount++;
-
-    // Log every 10 seconds to show we're still polling
-    uint32_t now = millis();
-    if (now - lastLog > 10000) {
-        LOG_INFO("GT911: readTouch count=%lu, init=%d", (unsigned long)callCount, touchInitialized ? 1 : 0);
-        lastLog = now;
-    }
-
     if (!touchInitialized) {
         return false;
     }
 
-    // Check if touch is pressed - this reads from I2C
     // Hold I2C lock during GT911 operations (shares Wire bus with epdiy)
-    {
-        concurrency::LockGuard guard(i2cLock);
-        bool pressed = touchDriver.isPressed();
-        if (pressed) {
-            int16_t tx[5], ty[5];
-            uint8_t touched = touchDriver.getPoint(tx, ty, touchDriver.getSupportTouchPoint());
-            if (touched > 0) {
-                *x = tx[0];
-                *y = ty[0];
-                LOG_INFO("GT911: Touch at %d,%d", *x, *y);
-                return true;
-            }
+    concurrency::LockGuard guard(i2cLock);
+    if (touchDriver.isPressed()) {
+        int16_t tx[5], ty[5];
+        uint8_t touched = touchDriver.getPoint(tx, ty, touchDriver.getSupportTouchPoint());
+        if (touched > 0) {
+            *x = tx[0];
+            *y = ty[0];
+            return true;
         }
     }
     return false;
@@ -87,33 +158,8 @@ bool readTouch(int16_t *x, int16_t *y)
  */
 void lateInitVariant()
 {
-    // T5S3-specific PCA9555 IO expander initialization (address 0x20)
-    // This supplements the upstream epdiy init with LilyGo board-specific config.
-    // The display is already initialized at this point.
-    {
-        concurrency::LockGuard guard(i2cLock);
-        const uint8_t PCA9555_ADDR = 0x20;
-        // Set inversion registers to 0 (no inversion)
-        Wire.beginTransmission(PCA9555_ADDR);
-        Wire.write(0x04);  // REG_INVERT_PORT0
-        Wire.write(0x00);
-        Wire.endTransmission();
-        Wire.beginTransmission(PCA9555_ADDR);
-        Wire.write(0x05);  // REG_INVERT_PORT1
-        Wire.write(0x00);
-        Wire.endTransmission();
-        // Set config register (all outputs)
-        Wire.beginTransmission(PCA9555_ADDR);
-        Wire.write(0x06);  // REG_CONFIG_PORT0
-        Wire.write(0x00);
-        Wire.endTransmission();
-        // Set output values
-        Wire.beginTransmission(PCA9555_ADDR);
-        Wire.write(0x02);  // REG_OUTPUT_PORT0
-        Wire.write(0xFF);
-        Wire.endTransmission();
-        LOG_DEBUG("PCA9555 IO expander configured for LilyGo T5 S3 E-Paper Pro");
-    }
+    // NOTE: PCA9535 Port 0 config (LoRa+GPS power enable) is done early in main.cpp setup(),
+    // before SPI and radio init. Do not duplicate it here.
 
     // Initialize GT911 touch controller using the same approach as LilyGo factory example:
     // - Wire is already initialized before epdiy (in main.cpp)
@@ -150,9 +196,16 @@ void lateInitVariant()
     }
     LOG_DEBUG("GT911: Interrupt mode set");
 
-    // Optional: Home button callback
+    // GT911 home button (virtual touch zone at bottom-center of display)
+    // Injects INPUT_BROKER_HOME event to navigate to home screen
     touchDriver.setHomeButtonCallback([](void *user_data) {
-        LOG_DEBUG("GT911 home button pressed");
+        LOG_DEBUG("GT911 home button - navigating to home screen");
+        if (inputBroker) {
+            InputEvent evt = {};
+            evt.source = "homeBtn";
+            evt.inputEvent = INPUT_BROKER_HOME;
+            inputBroker->injectInputEvent(&evt);
+        }
     }, NULL);
 
     touchInitialized = true;
@@ -162,6 +215,13 @@ void lateInitVariant()
     touchScreenImpl1->init();
 
     LOG_INFO("GT911 touch controller ready");
+
+    // Initialize PWR button handler via PCA9535 IO expander
+    // PCA9535 interrupt pin (GPIO 38) goes LOW when any port input changes.
+    // The button thread polls this pin and reads P12 state via I2C.
+    pinMode(PCA9535_INT, INPUT_PULLUP);
+    pwrButtonThread = new PCA9535ButtonThread();
+    LOG_INFO("PWR button handler initialized (PCA9535 P12 via GPIO %d)", PCA9535_INT);
 }
 
 #endif // LILYGO_T5_S3_EPAPER_PRO

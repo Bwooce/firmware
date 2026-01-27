@@ -1813,6 +1813,8 @@ int Screen::handleInputEvent(const InputEvent *event)
                 }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
                 showFrame(FrameDirection::PREVIOUS);
+            } else if (event->inputEvent == INPUT_BROKER_HOME) {
+                setFrames(FOCUS_DEFAULT);
             } else if (event->inputEvent == INPUT_BROKER_CANCEL) {
                 setOn(false);
             }

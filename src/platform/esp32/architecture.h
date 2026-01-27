@@ -205,6 +205,8 @@
 #define HW_VENDOR meshtastic_HardwareModel_M5STACK_C6L
 #elif defined(HELTEC_WIRELESS_TRACKER_V2)
 #define HW_VENDOR meshtastic_HardwareModel_HELTEC_WIRELESS_TRACKER_V2
+#elif defined(LILYGO_T5_S3_EPAPER_PRO)
+#define HW_VENDOR meshtastic_HardwareModel_T5_S3_EPAPER_PRO
 #else
 #define HW_VENDOR meshtastic_HardwareModel_PRIVATE_HW
 #endif
