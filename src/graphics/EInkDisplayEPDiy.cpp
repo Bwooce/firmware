@@ -6,14 +6,6 @@
 #include "I2CLock.h"
 #include "main.h"
 #include <Wire.h>
-#include <SPI.h>
-#include <driver/i2c.h>
-#include <driver/gpio.h>
-#include <rom/ets_sys.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <soc/gpio_struct.h>
-#include <soc/gpio_sig_map.h>
 
 // Include the board definition for LilyGo T5 S3 E-Paper Pro (V7 board with ED047TC1)
 extern "C" {
@@ -21,79 +13,6 @@ extern "C" {
 #include "render.h"
 extern const EpdBoardDefinition epd_board_v7;
 extern const EpdDisplay_t ED047TC1;
-}
-
-// Diagnostic: dump GPIO matrix output routing for LoRa/display shared pins
-static void dumpGpioMatrixState(const char *label)
-{
-    // Shared pins between epdiy LCD parallel bus and LoRa SPI:
-    //   GPIO 14 = LCD D13 / LoRa SCK    (LCD_DATA_OUT13_IDX=146, FSPICLK_OUT_IDX=101)
-    //   GPIO 13 = LCD D12 / LoRa MOSI   (LCD_DATA_OUT12_IDX=145, FSPID_OUT_IDX=103)
-    //   GPIO 21 = LCD D14 / LoRa MISO   (LCD_DATA_OUT14_IDX=147, FSPIQ_IN_IDX=102)
-    //   GPIO 10 = LCD D9  / LoRa DIO1   (LCD_DATA_OUT9_IDX=142)
-    //   GPIO 47 = LCD D15 / LoRa BUSY   (LCD_DATA_OUT15_IDX=148)
-    struct PinInfo {
-        int gpio;
-        const char *name;
-        int lcd_sig;
-        int spi_sig;
-    };
-    const PinInfo pins[] = {
-        {14, "SCK",  146, 101},
-        {13, "MOSI", 145, 103},
-        {21, "MISO", 147, 102},
-        {10, "DIO1", 142, -1},
-        {47, "BUSY", 148, -1},
-    };
-
-    LOG_INFO("GPIO matrix state [%s]:", label);
-    for (int i = 0; i < 5; i++) {
-        int gpio = pins[i].gpio;
-        uint32_t cfg = GPIO.func_out_sel_cfg[gpio].val;
-        int func_sel = cfg & 0x1FF;        // bits [8:0] - peripheral signal index
-        int oen_sel = (cfg >> 10) & 0x1;   // bit 10 - output enable source (0=GPIO, 1=peripheral)
-        int oen_inv = (cfg >> 11) & 0x1;   // bit 11 - output enable invert
-
-        const char *routed_to = "unknown";
-        if (func_sel == pins[i].lcd_sig)
-            routed_to = "LCD";
-        else if (func_sel == pins[i].spi_sig)
-            routed_to = "SPI";
-        else if (func_sel == SIG_GPIO_OUT_IDX)
-            routed_to = "GPIO";
-        else if (func_sel == 256)
-            routed_to = "GPIO(detached)";
-
-        LOG_INFO("  GPIO %d (%s): func_sel=%d (%s), oen_sel=%d, oen_inv=%d",
-                 gpio, pins[i].name, func_sel, routed_to, oen_sel, oen_inv);
-    }
-}
-
-// Diagnostic: probe SX1262 via SPI to check if SPI bus works
-static void probeSX1262(const char *label)
-{
-#if defined(LORA_SCK) && defined(LORA_CS)
-    // Try reading SX1262 status via a simple SPI transaction
-    // SX1262 GetStatus command: opcode 0xC0, returns status byte
-    pinMode(LORA_CS, OUTPUT);
-    digitalWrite(LORA_CS, HIGH);
-    delay(1);
-
-    SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
-    digitalWrite(LORA_CS, LOW);
-    uint8_t status = SPI.transfer(0xC0);  // GetStatus opcode
-    uint8_t resp = SPI.transfer(0x00);    // Read response
-    digitalWrite(LORA_CS, HIGH);
-    SPI.endTransaction();
-
-    // SX1262 status byte format: bits [6:4] = chip mode, bits [3:1] = command status
-    // If SPI is dead, we get 0x00 or 0xFF
-    int chipMode = (resp >> 4) & 0x07;
-    int cmdStatus = (resp >> 1) & 0x07;
-    LOG_INFO("SX1262 SPI probe [%s]: status=0x%02X, resp=0x%02X (chipMode=%d, cmdStatus=%d) %s",
-             label, status, resp, chipMode, cmdStatus,
-             (resp == 0x00 || resp == 0xFF) ? "** SPI LIKELY DEAD **" : "SPI OK");
-#endif
 }
 
 // Constructor
@@ -132,10 +51,6 @@ bool EInkDisplayEPDiy::connect()
     LOG_INFO("E-Paper frontlight available on GPIO %d", PIN_EINK_EN);
 #endif
 
-    // Diagnostic: check GPIO matrix and SPI state BEFORE display init
-    dumpGpioMatrixState("before epd_init");
-    probeSX1262("before epd_init");
-
     // Initialize epdiy with the V7 board definition and ED047TC1 display
     // This configures:
     // - I2C for PCA9535 IO expander and TPS65185 PMIC
@@ -152,9 +67,22 @@ bool EInkDisplayEPDiy::connect()
     epd_init(&epd_board_v7, &ED047TC1, EPD_OPTIONS_DEFAULT);
     LOG_DEBUG("epdiy: epd_init() complete");
 
-    // Diagnostic: check GPIO matrix and SPI state AFTER display init
-    dumpGpioMatrixState("after epd_init");
-    probeSX1262("after epd_init");
+    // Enable LoRa+GPS 3V3 power via PCA9535 IO expander Port 0.
+    // P00 controls the shared LoRa/GPS VCC3V3 supply (active HIGH).
+    // Must be set before radio init. The upstream epdiy board_v7 only configures Port 1
+    // (e-paper control lines); Port 0 (LilyGo board peripherals) needs separate config.
+    {
+        concurrency::LockGuard guard(i2cLock);
+        Wire.beginTransmission(0x20);
+        Wire.write(0x06); // REG_CONFIG_PORT0
+        Wire.write(0x00); // All outputs
+        Wire.endTransmission();
+        Wire.beginTransmission(0x20);
+        Wire.write(0x02); // REG_OUTPUT_PORT0
+        Wire.write(0xFF); // All HIGH (P00 = LoRa/GPS VCC3V3 enable)
+        Wire.endTransmission();
+    }
+    LOG_INFO("PCA9535 Port 0: LoRa+GPS power enabled");
 
     // Set VCOM voltage (from LilyGo T5S3 example - 1560mV)
     // This controls display contrast
@@ -191,10 +119,6 @@ bool EInkDisplayEPDiy::connect()
     LOG_DEBUG("epdiy: calling epd_hl_set_all_white()...");
     epd_hl_set_all_white(&hl);
 
-    // Diagnostic: check GPIO matrix after full display cycle (init + poweron + clear + poweroff)
-    dumpGpioMatrixState("after display clear cycle");
-    probeSX1262("after display clear cycle");
-
     epdiyInitialized = true;
     LOG_INFO("epdiy initialization complete");
 
@@ -208,16 +132,6 @@ bool EInkDisplayEPDiy::forceDisplay(uint32_t msecLimit)
 {
     if (!epdiyInitialized) {
         return false;
-    }
-
-    // Deferred diagnostics: log GPIO matrix and SPI state on first display update
-    // (connect() diagnostics fire before USB CDC is ready, so we repeat them here)
-    static bool deferredDiagDone = false;
-    if (!deferredDiagDone) {
-        deferredDiagDone = true;
-        LOG_INFO("=== Deferred epdiy diagnostics (USB CDC now ready) ===");
-        dumpGpioMatrixState("first forceDisplay");
-        probeSX1262("first forceDisplay");
     }
 
     uint32_t now = millis();
