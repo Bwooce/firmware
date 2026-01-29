@@ -67,22 +67,11 @@ bool EInkDisplayEPDiy::connect()
     epd_init(&epd_board_v7, &ED047TC1, EPD_OPTIONS_DEFAULT);
     LOG_DEBUG("epdiy: epd_init() complete");
 
-    // Enable LoRa+GPS 3V3 power via PCA9535 IO expander Port 0.
-    // P00 controls the shared LoRa/GPS VCC3V3 supply (active HIGH).
-    // Must be set before radio init. The upstream epdiy board_v7 only configures Port 1
-    // (e-paper control lines); Port 0 (LilyGo board peripherals) needs separate config.
-    {
-        concurrency::LockGuard guard(i2cLock);
-        Wire.beginTransmission(0x20);
-        Wire.write(0x06); // REG_CONFIG_PORT0
-        Wire.write(0x00); // All outputs
-        Wire.endTransmission();
-        Wire.beginTransmission(0x20);
-        Wire.write(0x02); // REG_OUTPUT_PORT0
-        Wire.write(0xFF); // All HIGH (P00 = LoRa/GPS VCC3V3 enable)
-        Wire.endTransmission();
-    }
-    LOG_INFO("PCA9535 Port 0: LoRa+GPS power enabled");
+    // NOTE: PCA9535 Port 0 is intentionally left at default (all inputs).
+    // The LilyGo factory firmware never configures Port 0. P00 (LoRa/GPS
+    // VCC3V3 supply) has an external pull-up, so power is always enabled.
+    // Setting undocumented P01-P07 as outputs could interfere with hardware.
+    // Only Port 1 is configured (by epdiy board_v7 for e-paper control).
 
     // Set VCOM voltage (from LilyGo T5S3 example - 1560mV)
     // This controls display contrast

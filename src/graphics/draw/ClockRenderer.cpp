@@ -368,106 +368,10 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         double minuteAngleOffset = ((double)second / 60) * degreesPerMinuteOrSecond;
         double minuteAngle = radians(minuteBaseAngle + minuteAngleOffset);
 
+#ifndef USE_EINK
         double secondAngle = radians(second * degreesPerMinuteOrSecond);
-
-        double hourX = sin(-hourAngle) * (hourHandNoonY - centerY) + noonX;
-        double hourY = cos(-hourAngle) * (hourHandNoonY - centerY) + centerY;
-
-        double minuteX = sin(-minuteAngle) * (minuteHandNoonY - centerY) + noonX;
-        double minuteY = cos(-minuteAngle) * (minuteHandNoonY - centerY) + centerY;
-
         double secondX = sin(-secondAngle) * (secondHandNoonY - centerY) + noonX;
         double secondY = cos(-secondAngle) * (secondHandNoonY - centerY) + centerY;
-
-        display->setFont(FONT_MEDIUM);
-
-        // draw minute and hour tick marks and hour numbers
-        for (uint16_t angle = 0; angle < 360; angle += 6) {
-            double angleInRadians = radians(angle);
-
-            double sineAngleInRadians = sin(-angleInRadians);
-            double cosineAngleInRadians = cos(-angleInRadians);
-
-            double endX = sineAngleInRadians * (tickMarkOuterNoonY - centerY) + noonX;
-            double endY = cosineAngleInRadians * (tickMarkOuterNoonY - centerY) + centerY;
-
-            if (angle % degreesPerHour == 0) {
-                double startX = sineAngleInRadians * (hoursTickMarkInnerNoonY - centerY) + noonX;
-                double startY = cosineAngleInRadians * (hoursTickMarkInnerNoonY - centerY) + centerY;
-
-                // draw hour tick mark
-                display->drawLine(startX, startY, endX, endY);
-
-                static char buffer[2];
-
-                uint8_t hourInt = (angle / 30);
-
-                if (hourInt == 0) {
-                    hourInt = 12;
-                }
-
-                // hour number x offset needs to be adjusted for some cases
-                int8_t hourStringXOffset;
-                int8_t hourStringYOffset = 13;
-
-                switch (hourInt) {
-                case 3:
-                    hourStringXOffset = 5;
-                    break;
-                case 9:
-                    hourStringXOffset = 7;
-                    break;
-                case 10:
-                case 11:
-                    hourStringXOffset = 8;
-                    break;
-                case 12:
-                    hourStringXOffset = 13;
-                    break;
-                default:
-                    hourStringXOffset = 6;
-                    break;
-                }
-
-                double hourStringX = (sineAngleInRadians * (hourStringNoonY - centerY) + noonX) - hourStringXOffset;
-                double hourStringY = (cosineAngleInRadians * (hourStringNoonY - centerY) + centerY) - hourStringYOffset;
-
-#ifdef T_WATCH_S3
-                // draw hour number
-                display->drawStringf(hourStringX, hourStringY, buffer, "%d", hourInt);
-#else
-#ifdef USE_EINK
-                if (currentResolution >= ScreenResolution::High) {
-                    // draw hour number
-                    display->drawStringf(hourStringX, hourStringY, buffer, "%d", hourInt);
-                }
-#else
-                if (currentResolution >= ScreenResolution::High &&
-                    (hourInt == 3 || hourInt == 6 || hourInt == 9 || hourInt == 12)) {
-                    // draw hour number
-                    display->drawStringf(hourStringX, hourStringY, buffer, "%d", hourInt);
-                }
-#endif
-#endif
-            }
-
-            if (angle % degreesPerMinuteOrSecond == 0) {
-                double startX = sineAngleInRadians * (secondsTickMarkInnerNoonY - centerY) + noonX;
-                double startY = cosineAngleInRadians * (secondsTickMarkInnerNoonY - centerY) + centerY;
-
-                if (currentResolution >= ScreenResolution::High) {
-                    // draw minute tick mark
-                    display->drawLine(startX, startY, endX, endY);
-                }
-            }
-        }
-
-        // draw hour hand
-        display->drawLine(centerX, centerY, hourX, hourY);
-
-        // draw minute hand
-        display->drawLine(centerX, centerY, minuteX, minuteY);
-#ifndef USE_EINK
         // draw second hand
         display->drawLine(centerX, centerY, secondX, secondY);
 #endif

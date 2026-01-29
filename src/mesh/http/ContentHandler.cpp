@@ -33,6 +33,7 @@
     - Jm Casler (jm@casler.org) Oct 2020
 */
 #undef str
+#undef NO_DATA
 
 // Includes for the https server
 //   https://github.com/fhessel/esp32_https_server

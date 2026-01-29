@@ -506,7 +506,6 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
         if (showCompass) {
             int yBelowContent = (line > 0 && line <= 5) ? (getTextPositions(display)[line - 1] + FONT_HEIGHT_SMALL + 2)
                                                         : getTextPositions(display)[1];
-            const int margin = 4;
 // --------- PATCH FOR EINK NAV BAR (ONLY CHANGE BELOW) -----------
 #if defined(USE_EINK)
             const int iconSize = 8 * NodeListRenderer::getIconScale();
@@ -514,6 +513,7 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
 #else
             const int navBarHeight = 0;
 #endif
+            const int margin = 4;
             int availableHeight = SCREEN_HEIGHT - yBelowContent - navBarHeight - margin;
             // --------- END PATCH FOR EINK NAV BAR -----------
 
@@ -985,6 +985,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
     const char *displayLine = ""; // Initialize to empty string by default
     meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
+    (void)ourNode;
 
     if (config.position.gps_mode != meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
         if (config.position.fixed_position) {
@@ -1299,6 +1300,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         if (currentResolution >= ScreenResolution::High) {
             NodeListRenderer::drawScaledXBitmap16x16(x, y, 8, 8, icon, display);
         } else {
+            // TODO: Increase size of icons
             display->drawXbm(x, y, iconSize, iconSize, icon);
         }
 

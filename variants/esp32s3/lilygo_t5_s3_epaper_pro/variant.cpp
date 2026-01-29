@@ -30,8 +30,14 @@
 
 // PCA9535 IO expander registers
 #define PCA9535_ADDR 0x20
+#define PCA9535_REG_INPUT_PORT0 0x00
 #define PCA9535_REG_INPUT_PORT1 0x01
+#define PCA9535_REG_CONF_PORT0  0x06
+#define PCA9535_REG_CONF_PORT1  0x07
+#define PCA9535_REG_OUT_PORT0   0x02
+#define PCA9535_REG_OUT_PORT1   0x03
 #define PCA9535_P12_BIT 0x04  // Bit 2 of port 1 = P12 (PWR button)
+#define PCA9535_P00_BIT 0x01  // Bit 0 of port 0 = LoRa/GPS Power
 
 // GT911 touch driver instance
 static TouchDrvGT911 touchDriver;
@@ -73,18 +79,47 @@ class PCA9535ButtonThread : public Observable<const InputEvent *>, public concur
             uint8_t port1_val = 0xFF;
             {
                 concurrency::LockGuard guard(i2cLock);
+                
+                // 1. Read PCA9535
+                bool readSuccess = false;
                 Wire.beginTransmission(PCA9535_ADDR);
                 Wire.write(PCA9535_REG_INPUT_PORT1);
-                Wire.endTransmission();
-                if (Wire.requestFrom((uint8_t)PCA9535_ADDR, (uint8_t)1) == 1) {
-                    port1_val = Wire.read();
+                if (Wire.endTransmission() == 0) {
+                    if (Wire.requestFrom((uint8_t)PCA9535_ADDR, (uint8_t)1) == 1) {
+                        int val = Wire.read();
+                        if (val != -1) {
+                            port1_val = (uint8_t)val;
+                            readSuccess = true;
+                        }
+                    }
+                }
+                
+                // 2. Filter invalid reads
+                if (!readSuccess || port1_val == 0x00) {
+                    if (!readSuccess) {
+                        // Log only if we were expecting a valid read (e.g. button pressed)
+                        // otherwise it might spam logs during contention
+                        if (btnPressed) LOG_WARN("PCA9535 read failed");
+                    } else {
+                        LOG_WARN("PCA9535 read 0x00 (invalid) - treating as released");
+                    }
+                    port1_val = 0xFF; // Treat as released
+                } else {
+                    // 3. Check for touch interference if button appears pressed
+                    // Only check if bit 2 is LOW (pressed)
+                    if (!(port1_val & PCA9535_P12_BIT)) {
+                        if (touchInitialized && touchDriver.isPressed()) {
+                            LOG_DEBUG("Ignoring PWR btn during touch event");
+                            port1_val = 0xFF; // Treat as released
+                        }
+                    }
                 }
             }
+
             // P12 is active LOW: bit clear = pressed
             bool pressed = !(port1_val & PCA9535_P12_BIT);
 
-            if (pressed && !btnPressed) {
-                btnPressed = true;
+            if (pressed && !btnPressed) {                btnPressed = true;
                 pressStartTime = millis();
                 longPressTriggered = false;
                 LOG_DEBUG("PWR button pressed (PCA9535 P12)");
@@ -158,8 +193,9 @@ bool readTouch(int16_t *x, int16_t *y)
  */
 void lateInitVariant()
 {
-    // NOTE: PCA9535 Port 0 config (LoRa+GPS power enable) is done early in main.cpp setup(),
-    // before SPI and radio init. Do not duplicate it here.
+    // NOTE: PCA9535 Port 0 is intentionally left at default (all inputs).
+    // P00 (LoRa/GPS 3V3 power) has an external pull-up and is always enabled.
+    // The LilyGo factory firmware never configures Port 0.
 
     // Initialize GT911 touch controller using the same approach as LilyGo factory example:
     // - Wire is already initialized before epdiy (in main.cpp)

@@ -1496,10 +1496,12 @@ class LipoCharger : public HasBatteryLevel
 #ifdef HAS_BQ27220
         if (bq) {
             if (charging) {
-                LOG_DEBUG("BQ27220 time to full charge: %d min", bq->getTimeToFull());
+                uint16_t ttf = bq->getTimeToFull();
+                if (ttf != 65535) LOG_DEBUG("BQ27220 time to full charge: %d min", ttf);
             } else {
                 if (!PPM->isVbusIn()) {
-                    LOG_DEBUG("BQ27220 time to empty: %d min (%d mAh)", bq->getTimeToEmpty(), bq->getRemainingCapacity());
+                    uint16_t tte = bq->getTimeToEmpty();
+                    if (tte != 65535) LOG_DEBUG("BQ27220 time to empty: %d min (%d mAh)", tte, bq->getRemainingCapacity());
                 }
             }
         }

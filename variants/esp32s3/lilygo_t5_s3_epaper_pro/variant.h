@@ -17,6 +17,50 @@
 // IO Expander: PCA9535 (16-pin, I2C address 0x20)
 //
 // ===========================================================================
+// PERIPHERAL INITIALIZATION ORDER (CRITICAL)
+// ===========================================================================
+//
+// All I2C devices share the same bus (GPIO 39/40). The epdiy library
+// requires exclusive or carefully shared access to manage the e-paper PMIC.
+//
+// WORKING SEQUENCE:
+//   1. Wire.begin(39, 40) - Installs the I2C driver into the Arduino layer.
+//   2. epd_init() - Shares the existing I2C driver (fails silently on install).
+//   3. touchDriver.begin() - Uses the already-installed Wire driver.
+//
+// BROKEN SEQUENCES:
+//   - epd_init() before Wire.begin(): epdiy may install a driver that Wire 
+//     cannot interact with properly.
+//   - Wire.end() before epd_init(): Deleting the driver causes epdiy to
+//     fail or behave inconsistently with subsequent Arduino Wire calls.
+//
+// I2C MUTEX (i2cLock):
+//   ALL I2C operations (Touch, RTC, Power, PCA9535) MUST be wrapped in 
+//   concurrency::LockGuard guard(i2cLock). This prevents bus contention 
+//   during display refreshes when epdiy talks to the TPS65185 PMIC.
+//
+// ===========================================================================
+// HARDWARE PITFALLS & RESET BEHAVIOR
+// ===========================================================================
+//
+// IO48 / CKV CONFLICT:
+//   GPIO 48 is the CKV (Clock Vertical) line for the e-paper display.
+//   During refresh, it pulses at ~200kHz. 
+//   CRITICAL: Never attach interrupts or define as a button. 
+//   Doing so triggers an interrupt storm that causes SW_CPU (Reason 12) 
+//   watchdog resets and immediate boot loops.
+//
+// SOFT-RESTART / LORA POWER:
+//   SX1262 and GPS are powered via a high-side switch on PCA9535 Port 0 Pin 0.
+//   On soft-restart, this pin may float or default to input, cutting power.
+//   FIX: initVariantEarly() in main.cpp explicitly drives P00 HIGH at boot.
+//
+// USB CDC / BOOT LOOP:
+//   If the device enters a boot loop, native USB CDC may disconnect before
+//   logs flush. Use -DCONFIG_ESP_SYSTEM_PANIC_PRINT_HALT to freeze on crash.
+//   To recover from I/O errors during flash, hold BOOT and toggle RST.
+//
+// ===========================================================================
 // Physical Buttons (4x side-mounted)
 // ===========================================================================
 //
@@ -105,7 +149,7 @@
 // Directly managed by Meshtastic for button detection (P12).
 // All access must use i2cLock mutex to prevent bus contention.
 //
-// Port 0 (P00-P07): All unassigned / available
+// Port 0 (P00-P07): Left at default (all inputs). P00 = LoRa/GPS 3V3 (ext pull-up, always on).
 // Port 1:
 //   P10 (0x0100) = EP_OE    - E-paper output enable
 //   P11 (0x0200) = EP_MODE  - E-paper mode select

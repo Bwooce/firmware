@@ -147,7 +147,7 @@ void initDeepSleep()
 
     // Detailed reset reason logging for debugging
     const char *hwReasonStr = "unknown";
-    switch (hwReason) {
+    switch ((int)hwReason) {
         case 1:  hwReasonStr = "POWERON"; break;
         case 3:  hwReasonStr = "SW_RESET"; break;
         case 4:  hwReasonStr = "OWDT_RESET"; break;

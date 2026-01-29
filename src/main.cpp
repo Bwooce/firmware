@@ -49,6 +49,7 @@ PCA9557 io(0x18, &Wire);
 
 #ifdef ARCH_ESP32
 #include "freertosinc.h"
+#include <driver/gpio.h>
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
 #include "mesh/http/WebServer.h"
 #endif
@@ -509,6 +510,38 @@ void setup()
 
     initDeepSleep();
 
+#ifdef LILYGO_T5_S3_EPAPER_PRO
+    // Match LilyGo factory firmware early init sequence:
+    // 1. Release GPIO holds on LoRa RST and Touch RST (may persist across software resets)
+    // 2. Disable deep sleep hold globally
+    // 3. Pre-set LoRa CS HIGH before SPI.begin() to prevent spurious SPI activity
+    gpio_hold_dis((gpio_num_t)LORA_RESET);
+    gpio_hold_dis((gpio_num_t)9);  // GT911 Touch RST
+    gpio_deep_sleep_hold_dis();
+    // Deassert LORA_RESET (active LOW) - must drive HIGH to bring SX1262 out of reset.
+    pinMode(LORA_RESET, OUTPUT);
+    digitalWrite(LORA_RESET, HIGH);
+    pinMode(LORA_CS, OUTPUT);
+    digitalWrite(LORA_CS, HIGH);
+
+    // 4. Power on LoRa/GPS via PCA9535 P00
+    // We must do this before SPI/Radio init to fix Error 4 (NO_INTERFACE) on soft-restart.
+    Wire.begin(I2C_SDA, I2C_SCL);
+    Wire.beginTransmission(0x20); // PCA9535 address
+    Wire.write(0x06); // Configuration Register Port 0
+    Wire.write(0xFE); // Set P00 as output, others as input
+    if (Wire.endTransmission() == 0) {
+        Wire.beginTransmission(0x20);
+        Wire.write(0x02); // Output Register Port 0
+        Wire.write(0x01); // Drive P00 HIGH
+        Wire.endTransmission();
+        Serial.println("LilyGo T5S3: Radio power enabled (PCA9535 P00)");
+    } else {
+        Serial.println("LilyGo T5S3: PCA9535 communication failed at boot");
+    }
+    delay(100); // Allow 3.3V rail to stabilize
+#endif
+
 #if defined(MODEM_POWER_EN)
     pinMode(MODEM_POWER_EN, OUTPUT);
     digitalWrite(MODEM_POWER_EN, LOW);
@@ -948,6 +981,26 @@ void setup()
 #endif
 #endif
 
+#ifdef LILYGO_T5_S3_EPAPER_PRO
+    // SPI diagnostic: test SX1262 communication BEFORE epdiy display init.
+    // Store results to log later (USB CDC not ready for early boot output).
+    static uint8_t t5s3_diag_before_s1, t5s3_diag_before_s2;
+    static int t5s3_diag_before_busy, t5s3_diag_before_rst;
+    {
+        SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+        digitalWrite(LORA_CS, LOW);
+        delayMicroseconds(1);
+        t5s3_diag_before_s1 = SPI.transfer(0xC0);  // GetStatus opcode
+        t5s3_diag_before_s2 = SPI.transfer(0x00);  // NOP to clock out response
+        digitalWrite(LORA_CS, HIGH);
+        SPI.endTransaction();
+
+        pinMode(SX126X_BUSY, INPUT);
+        t5s3_diag_before_busy = digitalRead(SX126X_BUSY);
+        t5s3_diag_before_rst = digitalRead(LORA_RESET);
+    }
+#endif
+
     // Initialize the screen first so we can show the logo while we start up everything else.
 #if HAS_SCREEN
     if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
@@ -1261,6 +1314,23 @@ void setup()
     if (screen_found.port != ScanI2C::I2CPort::NO_I2C && screen)
         screen->setup();
 #endif
+#endif
+
+#ifdef LILYGO_T5_S3_EPAPER_PRO
+    // SPI diagnostic: test SX1262 communication AFTER epdiy display init.
+    static uint8_t t5s3_diag_after_s1, t5s3_diag_after_s2;
+    static int t5s3_diag_after_busy;
+    {
+        SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+        digitalWrite(LORA_CS, LOW);
+        delayMicroseconds(1);
+        t5s3_diag_after_s1 = SPI.transfer(0xC0);
+        t5s3_diag_after_s2 = SPI.transfer(0x00);
+        digitalWrite(LORA_CS, HIGH);
+        SPI.endTransaction();
+
+        t5s3_diag_after_busy = digitalRead(SX126X_BUSY);
+    }
 #endif
 
 #ifdef ARCH_PORTDUINO
@@ -1588,6 +1658,14 @@ void setup()
     nodeDB->notifyObservers(true);
 
     LOG_INFO("=== SETUP COMPLETE === Now entering main loop");
+
+#ifdef LILYGO_T5_S3_EPAPER_PRO
+    // Deferred SPI diagnostic output (early boot messages lost on USB CDC)
+    LOG_WARN("SX1262 SPI diag BEFORE epdiy: GetStatus=0x%02x 0x%02x, BUSY=%d, RST=%d",
+             t5s3_diag_before_s1, t5s3_diag_before_s2, t5s3_diag_before_busy, t5s3_diag_before_rst);
+    LOG_WARN("SX1262 SPI diag AFTER epdiy: GetStatus=0x%02x 0x%02x, BUSY=%d",
+             t5s3_diag_after_s1, t5s3_diag_after_s2, t5s3_diag_after_busy);
+#endif
 }
 
 #endif

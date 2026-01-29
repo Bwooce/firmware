@@ -148,5 +148,10 @@ int32_t StatusLEDModule::runOnce()
     digitalWrite(Battery_LED_4, chargeIndicatorLED4);
 #endif
 
+    (void)chargeIndicatorLED1;
+    (void)chargeIndicatorLED2;
+    (void)chargeIndicatorLED3;
+    (void)chargeIndicatorLED4;
+
     return (my_interval);
 }

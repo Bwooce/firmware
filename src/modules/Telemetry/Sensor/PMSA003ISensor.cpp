@@ -57,7 +57,7 @@ bool PMSA003ISensor::getMetrics(meshtastic_Telemetry *measurement)
     uint32_t currentClock = reClockI2C(PMSA003I_I2C_CLOCK_SPEED, _bus);
 #endif
 
-    _bus->requestFrom(_address, PMSA003I_FRAME_LENGTH);
+    _bus->requestFrom((uint8_t)_address, (uint8_t)PMSA003I_FRAME_LENGTH);
     if (_bus->available() < PMSA003I_FRAME_LENGTH) {
         LOG_WARN("PMSA003I read failed: incomplete data (%d bytes)", _bus->available());
         return false;

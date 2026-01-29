@@ -672,13 +672,13 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     for (size_t i = 0; i < cachedHeights.size(); ++i)
         totalHeight += cachedHeights[i];
     int usableScrollHeight = usableHeight;
-    int scrollStop = std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
-
 #ifndef USE_EINK
     uint32_t now = millis();
     float delta = (now - lastTime) / 400.0f;
     lastTime = now;
     const float scrollSpeed = 2.0f;
+
+    int scrollStop = std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
 
     if (scrollStartDelay == 0)
         scrollStartDelay = now;
@@ -690,7 +690,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             if (!waitingToReset) {
                 scrollY += delta * scrollSpeed;
                 if (scrollY >= scrollStop) {
-                    scrollY = scrollStop;
+                    scrollY = (float)scrollStop;
                     waitingToReset = true;
                     pauseStart = lastTime;
                 }
@@ -776,6 +776,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     }
     int totalContentHeight = totalHeight;
     int visibleHeight = usableHeight;
+    // int scrollStop = std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
 
     // Draw scrollbar
     drawMessageScrollbar(display, visibleHeight, totalContentHeight, finalScroll, getTextPositions(display)[1]);

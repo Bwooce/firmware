@@ -30,7 +30,7 @@ SerialConsole *console;
 
 void consoleInit()
 {
-    auto sc = new SerialConsole(); // Must be dynamically allocated because we are now inheriting from thread
+    new SerialConsole(); // Must be dynamically allocated because we are now inheriting from thread
 
 #if defined(SERIAL_HAS_ON_RECEIVE)
     // onReceive does only exist for HardwareSerial not for USB CDC serial
