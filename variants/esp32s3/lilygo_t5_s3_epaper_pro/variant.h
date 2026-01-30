@@ -17,6 +17,47 @@
 // IO Expander: PCA9535 (16-pin, I2C address 0x20)
 //
 // ===========================================================================
+// Initialization Sequence & I2C Bus Sharing (CRITICAL)
+// ===========================================================================
+//
+// This board has a complex I2C topology where high-speed display drivers (epdiy)
+// share the bus (SDA=39, SCL=40) with standard sensors (Touch, RTC, Power).
+//
+// WORKING SEQUENCE:
+// 1. Wire.begin(39, 40)
+//    - Must be called FIRST to establish the ESP-IDF I2C driver on Port 0.
+//    - This is handled by standard Arduino/Meshtastic startup.
+//
+// 2. Radio Power Enable (PCA9535 P00)
+//    - The SX1262 and GPS are powered by the PCA9535 IO Expander (P00).
+//    - This MUST be enabled via I2C (Wire) before RadioLib initializes.
+//    - Done in main.cpp setup() block using raw Wire commands.
+//
+// 3. epd_init(EPD_OPTIONS_DEFAULT)
+//    - Initializes the epdiy e-paper driver.
+//    - CRITICAL: epdiy attempts to install its own I2C driver. If `Wire.begin()`
+//      has already run, `i2c_driver_install` fails safely (returns error), but
+//      epdiy ignores the error and proceeds using the existing driver.
+//    - This "fail-silent" behavior is the KEY to sharing the bus.
+//
+// 4. Touch Driver Init
+//    - Must happen AFTER `epd_init` because epdiy resets the bus during init.
+//    - Uses the standard `Wire` instance.
+//
+// FAILED APPROACHES (DO NOT TRY):
+// x Initializing epd_init() before Wire.begin()
+//   - Result: Wire.begin() fails because epdiy owns the hardware resource.
+//   - Sensors/Touch become inaccessible.
+// x Deleting I2C driver (i2c_driver_delete) between steps
+//   - Result: Destabilizes the bus, causes crashes in dependent drivers.
+// x Using separate I2C ports (Wire1)
+//   - Result: Physical pins are hardwired; cannot use second controller on same pins.
+//
+// I2C SAFETY:
+// - All runtime I2C access (checking battery, reading touch, updating display)
+//   MUST use `concurrency::LockGuard guard(i2cLock)` to prevent collision.
+//
+// ===========================================================================
 // Physical Buttons (4x side-mounted)
 // ===========================================================================
 //
@@ -118,6 +159,43 @@
 //
 // Interrupt: GPIO 38 (PCA9535_INT) fires LOW on any input pin change.
 // Use for interrupt-driven PWR button detection (P12 state change).
+// Note: epdiy also registers an ISR on GPIO 38 for TPS65185 power events.
+//
+// ---------------------------------------------------------------------------
+// P12 PIN CONFLICT: PWR button vs epdiy __CFG_PIN_STV (CRITICAL)
+// ---------------------------------------------------------------------------
+//
+// P12 is dual-mapped:
+//   - Hardware: PWR button readback (active LOW when BQ25896 QON pressed)
+//   - epdiy:   __CFG_PIN_STV (Start Vertical control for e-paper refresh)
+//
+// In epdiy's epd_board_v7.c, P12 is defined as __CFG_PIN_STV (the double
+// underscore prefix suggests this was experimental). During epd_board_init(),
+// P12 is correctly configured as INPUT (included in the config mask).
+// However, during epd_board_deinit() (called after every display poweroff),
+// the Port 1 config is rewritten WITHOUT P12 in the input mask:
+//
+//   Init:   set_config(port, PWRGOOD | INT | STV, 1)    -- P12=input (ok)
+//   Deinit: set_config(port, PWRGOOD | INT | VCOM | PWRUP, 1) -- P12=output
+//
+// When P12 becomes an output, it is driven LOW (the output register never
+// sets bit 2). This makes P12 read as permanently pressed. The PWR button
+// thread then detects a >1s "long press" and triggers INPUT_BROKER_SHUTDOWN,
+// causing a spurious deep sleep.
+//
+// FIX (in variant.cpp PCA9535ButtonThread):
+// Before every P12 read, the button thread writes the Port 1 config
+// register to re-assert P12 as input (mask 0xC4 = bits 2,6,7).
+// This is safe because:
+//   - It only affects the config for P12, P16, P17 (all inputs anyway)
+//   - epdiy only needs P12 as STV during active display refresh, not idle
+//   - The write is protected by i2cLock
+//   - epdiy's own code for STV (push_cfg) has the STV line commented out
+//
+// Additionally, the I2C read uses a repeated start to prevent epdiy's
+// concurrent ESP-IDF I2C operations from changing the register pointer
+// between address write and data read. Debouncing (3 consecutive reads)
+// provides further protection against transient glitches.
 //
 // ===========================================================================
 // BQ25896 Charger / BQ27220 Fuel Gauge

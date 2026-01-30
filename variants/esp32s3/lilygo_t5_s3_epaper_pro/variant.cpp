@@ -31,7 +31,21 @@
 // PCA9535 IO expander registers
 #define PCA9535_ADDR 0x20
 #define PCA9535_REG_INPUT_PORT1 0x01
+#define PCA9535_REG_CONFIG_PORT1 0x07
 #define PCA9535_P12_BIT 0x04  // Bit 2 of port 1 = P12 (PWR button)
+
+// PCA9535 Port 1 pin mask: pins that must be configured as inputs.
+// P12 (bit 2) = PWR button readback
+// P16 (bit 6) = TPS65185 PWRGOOD status
+// P17 (bit 7) = TPS65185 interrupt
+//
+// IMPORTANT: P12 is mapped as __CFG_PIN_STV in epdiy's epd_board_v7.c.
+// During epd_board_deinit() (called after every display poweroff), epdiy
+// reconfigures Port 1 and REMOVES P12 from the input mask, making it an
+// output driven LOW. This looks like a permanent PWR button press, causing
+// spurious shutdowns. We fix this by re-asserting P12 as input before
+// every read in the button thread.
+#define PCA9535_PORT1_INPUT_MASK 0xC4  // bits 2,6,7 = P12,P16,P17
 
 // GT911 touch driver instance
 static TouchDrvGT911 touchDriver;
@@ -46,6 +60,21 @@ static bool touchInitialized = false;
  *
  * Short press (<1s) = toggle screen on/off (INPUT_BROKER_CANCEL)
  * Long press (>=1s) = software shutdown (INPUT_BROKER_SHUTDOWN)
+ *
+ * WORKAROUND for epdiy P12/STV pin conflict:
+ * epdiy's epd_board_v7.c maps PCA9535 P12 as __CFG_PIN_STV. During
+ * epd_board_deinit() (after every display poweroff), epdiy reconfigures
+ * Port 1 and drops P12 from the input mask, making it an output driven LOW.
+ * This looks like a permanent button press. We fix this by writing the
+ * config register to re-assert P12 as input before every read.
+ *
+ * Additionally, the I2C read uses a repeated start (endTransmission(false))
+ * to prevent epdiy's raw ESP-IDF I2C operations from changing the PCA9535
+ * register pointer between our address write and data read.
+ *
+ * Debouncing requires DEBOUNCE_COUNT consecutive "pressed" reads (at 50ms
+ * intervals) before registering a press, preventing single-read glitches
+ * from triggering actions.
  */
 class PCA9535ButtonThread : public Observable<const InputEvent *>, public concurrency::OSThread
 {
@@ -64,8 +93,8 @@ class PCA9535ButtonThread : public Observable<const InputEvent *>, public concur
         if (digitalRead(PCA9535_INT) == LOW) {
             needRead = true;
         }
-        // Continue polling I2C while button is held to detect release
-        if (btnPressed) {
+        // Continue polling I2C while button is held or debouncing
+        if (btnPressed || debounceCount > 0) {
             needRead = true;
         }
 
@@ -73,23 +102,44 @@ class PCA9535ButtonThread : public Observable<const InputEvent *>, public concur
             uint8_t port1_val = 0xFF;
             {
                 concurrency::LockGuard guard(i2cLock);
+
+                // Re-assert P12 as input. epdiy's epd_board_deinit() reconfigures
+                // Port 1 and drops P12 from the input mask (see header comment).
+                Wire.beginTransmission(PCA9535_ADDR);
+                Wire.write(PCA9535_REG_CONFIG_PORT1);
+                Wire.write(PCA9535_PORT1_INPUT_MASK);
+                Wire.endTransmission();
+
+                // Read Port 1 input register using repeated start to keep the bus
+                // locked between register address write and data read. Without this,
+                // epdiy's raw ESP-IDF I2C operations can change the PCA9535 register
+                // pointer between our two transactions, causing a wrong-register read.
                 Wire.beginTransmission(PCA9535_ADDR);
                 Wire.write(PCA9535_REG_INPUT_PORT1);
-                Wire.endTransmission();
+                Wire.endTransmission(false);  // repeated start - keeps bus locked
                 if (Wire.requestFrom((uint8_t)PCA9535_ADDR, (uint8_t)1) == 1) {
                     port1_val = Wire.read();
                 }
             }
             // P12 is active LOW: bit clear = pressed
-            bool pressed = !(port1_val & PCA9535_P12_BIT);
+            bool rawPressed = !(port1_val & PCA9535_P12_BIT);
 
-            if (pressed && !btnPressed) {
-                btnPressed = true;
-                pressStartTime = millis();
-                longPressTriggered = false;
-                LOG_DEBUG("PWR button pressed (PCA9535 P12)");
-            } else if (!pressed && btnPressed) {
+            // Debounce: require DEBOUNCE_COUNT consecutive reads showing pressed
+            if (rawPressed && !btnPressed) {
+                debounceCount++;
+                if (debounceCount >= DEBOUNCE_COUNT) {
+                    btnPressed = true;
+                    debounceCount = 0;
+                    pressStartTime = millis();
+                    longPressTriggered = false;
+                    LOG_DEBUG("PWR button pressed (PCA9535 P12, debounced)");
+                }
+            } else if (!rawPressed && !btnPressed) {
+                // Not pressed and not yet registered - reset debounce
+                debounceCount = 0;
+            } else if (!rawPressed && btnPressed) {
                 btnPressed = false;
+                debounceCount = 0;
                 uint32_t duration = millis() - pressStartTime;
                 LOG_DEBUG("PWR button released after %lu ms", (unsigned long)duration);
                 if (!longPressTriggered && duration < LONG_PRESS_TIME) {
@@ -116,9 +166,11 @@ class PCA9535ButtonThread : public Observable<const InputEvent *>, public concur
 
   private:
     static const uint32_t LONG_PRESS_TIME = 1000;
+    static const uint8_t DEBOUNCE_COUNT = 3;  // 3 consecutive reads = 150ms
     bool btnPressed = false;
     uint32_t pressStartTime = 0;
     bool longPressTriggered = false;
+    uint8_t debounceCount = 0;
 };
 
 static PCA9535ButtonThread *pwrButtonThread = nullptr;
@@ -219,9 +271,25 @@ void lateInitVariant()
     // Initialize PWR button handler via PCA9535 IO expander
     // PCA9535 interrupt pin (GPIO 38) goes LOW when any port input changes.
     // The button thread polls this pin and reads P12 state via I2C.
+    // Note: epdiy also registers an ISR on GPIO 38 (CFG_INTR) for PCA9535
+    // interrupt-driven power management. Our digitalRead() coexists with that ISR.
     pinMode(PCA9535_INT, INPUT_PULLUP);
     pwrButtonThread = new PCA9535ButtonThread();
     LOG_INFO("PWR button handler initialized (PCA9535 P12 via GPIO %d)", PCA9535_INT);
+
+    // Light sleep and USB-CDC interaction on ESP32-S3:
+    // Entering light sleep disconnects native USB-CDC. If a host serial monitor is
+    // connected, it detects the disconnect, reconnects, and opening the port toggles
+    // DTR which resets the ESP32-S3 - creating an infinite reboot loop.
+    // This is only a problem when USB serial is actively connected (development/debug).
+    // For untethered operation (battery + LoRa only), light sleep saves significant power.
+    // We log the risk but do NOT force-disable light sleep - the user can configure
+    // ls_secs=0 via Meshtastic settings if they need persistent USB serial.
+    if (config.power.ls_secs != 0) {
+        LOG_WARN("Light sleep enabled (ls_secs=%lu). Note: USB-CDC will disconnect during sleep, "
+                 "which may cause reboot loops if a serial monitor is connected.",
+                 (unsigned long)config.power.ls_secs);
+    }
 }
 
 #endif // LILYGO_T5_S3_EPAPER_PRO
