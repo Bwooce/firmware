@@ -31,6 +31,12 @@
 #include "input/LinuxInputImpl.h"
 #endif
 
+#if defined(USE_EINK_EPDIY)
+extern "C" {
+#include "epdiy.h"
+}
+#endif
+
 // Working USB detection for powered/charging states on the RAK platform
 #ifdef NRF_APM
 #include "nrfx_power.h"
@@ -757,6 +763,16 @@ void Power::reboot()
 {
     notifyReboot.notifyObservers(NULL);
 #if defined(ARCH_ESP32)
+#if defined(USE_EINK_EPDIY)
+    // Clear the e-paper display before rebooting so stale content isn't
+    // visible while the device restarts. Hold I2C lock during epdiy ops.
+    {
+        concurrency::LockGuard guard(i2cLock);
+        epd_poweron();
+        epd_clear();
+        epd_poweroff();
+    }
+#endif
     ESP.restart();
 #elif defined(ARCH_NRF52)
     NVIC_SystemReset();

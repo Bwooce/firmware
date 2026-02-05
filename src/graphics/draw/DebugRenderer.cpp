@@ -528,7 +528,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 
     // === Layout ===
     int line = 1;
-    const int barHeight = 6;
+    int barHeight = 6;
     const int labelX = x;
     int barsOffset = (currentResolution >= ScreenResolution::High) ? 24 : 0;
 #ifdef USE_EINK
@@ -537,7 +537,11 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 #endif
 #endif
     int barX = x + barsOffset;
-    if (currentResolution == ScreenResolution::UltraLow) {
+    if (currentResolution == ScreenResolution::Large) {
+        // Large screens (e.g. 540x960 e-paper) use 28px fonts - labels need more room
+        barX = x + 100;
+        barHeight = 10;
+    } else if (currentResolution == ScreenResolution::UltraLow) {
         barX += 45;
     } else {
         barX += 40;

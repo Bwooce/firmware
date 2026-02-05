@@ -64,7 +64,7 @@ bool EInkDisplayEPDiy::connect()
     // We do NOT delete the I2C driver before epd_init() - this allows Wire to remain
     // functional for GT911 touch, RTC, and other I2C devices after display init.
     LOG_DEBUG("epdiy: calling epd_init()");
-    epd_init(&epd_board_v7, &ED047TC1, EPD_OPTIONS_DEFAULT);
+    epd_init(&epd_board_v7, &ED047TC1, EPD_LUT_64K);
     LOG_DEBUG("epdiy: epd_init() complete");
 
     // Enable LoRa+GPS 3V3 power via PCA9535 IO expander Port 0.
@@ -177,8 +177,10 @@ bool EInkDisplayEPDiy::forceDisplay(uint32_t msecLimit)
         concurrency::LockGuard guard(i2cLock);
         epd_poweron();
 
-        // Use MODE_GL16 for good quality grayscale transitions
-        // Get ambient temperature from TPS65185 PMIC for optimal waveform timing
+        // Use MODE_GL16 for non-flashing differential updates (no black flash).
+        // MODE_GC16 does full black→white→content on every refresh which is ugly.
+        // GL16 may accumulate ghost artifacts over many updates; a periodic GC16
+        // full refresh could be added later if needed.
         int temperature = epd_ambient_temperature();
         enum EpdDrawError err = epd_hl_update_screen(&hl, MODE_GL16, temperature);
 

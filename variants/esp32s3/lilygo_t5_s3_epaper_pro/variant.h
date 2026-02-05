@@ -71,10 +71,6 @@
 // BOOT - GPIO 0. ESP32-S3 strapping pin.
 //        Active LOW with external pullup.
 //        Hold during reset to enter USB bootloader mode.
-//        Used by Meshtastic as BUTTON_PIN (user button):
-//          Single press = navigate UI
-//          Long press (500ms) = select
-//          Very long press (3.9s) = shutdown
 //        Also configured as ext1 deep sleep wake source (ANY_LOW).
 //
 // RST  - ESP32-S3 EN (enable/reset) pin.
@@ -86,10 +82,11 @@
 //        Also used as CKV (Clock Vertical) by the epdiy e-paper driver.
 //        CKV clocks the row shift register during display refresh, pulsing
 //        at up to 200kHz for ~500ms per refresh cycle. Between refreshes
-//        the pin is idle. LilyGo exposes this as a button, suggesting
-//        hardware isolation or intended use during idle periods.
-//        Currently not configured in Meshtastic - needs hardware testing
-//        to confirm safe dual-use with epdiy before enabling.
+//        the pin is idle.
+//        Candidate use: frontlight toggle (GPIO 11, PIN_EINK_EN).
+//        Implementation would need to only read GPIO 48 when no display
+//        refresh is active, since CKV pulses would look like rapid presses.
+//        Currently not configured in Meshtastic.
 //
 // ===========================================================================
 // Touch Controller - GT911 Capacitive
@@ -106,11 +103,31 @@
 //   - Virtual home button (see below)
 //   - Configurable refresh rate and sensitivity
 //
-// Current Meshtastic mapping (TouchScreenImpl1):
-//   Swipe left/right = INPUT_BROKER LEFT/RIGHT (screen navigation)
-//   Swipe up/down    = INPUT_BROKER UP/DOWN
-//   Tap              = INPUT_BROKER USER_PRESS (28)
-//   Long press       = INPUT_BROKER SELECT (10)
+// ===========================================================================
+// Meshtastic Input Mapping (active on this variant)
+// ===========================================================================
+//
+// Source          | Gesture/Action    | Input Event            | UI Effect
+// ---------------------------------------------------------------------------
+// BOOT (GPIO 0)  | Single press      | USER_PRESS             | Next frame
+//                | Long press 500ms  | SELECT                 | Enter menu/select
+//                | Very long 3.9s    | SHUTDOWN               | Deep sleep
+// PWR (PCA9535)  | Short press <1s   | CANCEL                 | Screen off/on
+//                | Long press >=1s   | SHUTDOWN               | Software shutdown
+// Touch          | Swipe left        | LEFT                   | Previous frame
+//                | Swipe right       | RIGHT                  | Next frame
+//                | Swipe up          | UP                     | Scroll up in list
+//                | Swipe down        | DOWN                   | Scroll down in list
+//                | Tap               | USER_PRESS             | Next frame/select
+//                | Long press        | SELECT                 | Enter menu/select
+// GT911 Home     | Touch zone press  | HOME                   | Navigate to home
+// IO48 (GPIO 48) | (not configured)  | -                      | -
+//
+// Frontlight (GPIO 11, PIN_EINK_EN):
+//   Currently controlled by Meshtastic screen_brightness setting.
+//   screen_brightness=1 turns frontlight on (digitalWrite HIGH).
+//   The LilyGo factory firmware supports 4 PWM levels via analogWrite
+//   (0=off, 50=low, 100=medium, 230=high) on this same pin.
 //
 // ===========================================================================
 // GT911 Home Button ("menu_btn" in LilyGo factory firmware)
@@ -216,6 +233,26 @@
 // Defining them (even as 0) triggers HAS_PMU which expects AXP chips.
 //
 // ===========================================================================
+// SX1262 LoRa Radio - SPI Init (RESOLVED)
+// ===========================================================================
+//
+// ROOT CAUSE: ARDUINO_USB_MODE=0 in the board JSON prevented GPIO 46 (CS)
+// from being driven LOW. With USB_MODE=0, the USB-Serial/JTAG controller
+// locks GPIO 46 (a strapping pin) so it cannot be used as a normal output.
+// This caused all SPI communication to return 0xFF (chip select never asserted).
+//
+// FIX: Changed boards/lilygo-t5-s3-epaper-pro.json to ARDUINO_USB_MODE=1
+// (matching the LilyGo SDK board definition). This uses the hardware USB
+// peripheral (tinyusb) instead of the USB-Serial/JTAG controller, freeing
+// GPIO 46 for normal GPIO use.
+//
+// EARLY INIT: main.cpp includes a T5S3-specific early init block that:
+//   1. Releases GPIO holds from deep sleep
+//   2. Sets SPI CS pins HIGH before power-on (with gpio_reset_pin for GPIO 46)
+//   3. Power cycles the radio via PCA9535 P00 (LOW->HIGH with 100ms discharge)
+//   4. Waits 1500ms for SX1262 startup (matching SDK timing)
+//
+// ===========================================================================
 // Pin Definitions
 // ===========================================================================
 //
@@ -244,7 +281,6 @@
 #define SX126X_DIO2_AS_RF_SWITCH
 
 // SD Card (shares SPI bus with LoRa)
-// Useful for Range Test Module CSV logging and file transfer
 #define HAS_SDCARD
 #define SPI_MOSI 13
 #define SPI_MISO 21
@@ -268,6 +304,15 @@
 // Parallel data bus: D0-D7 = GPIO 5,6,7,15,16,17,18,8
 // Control: CKV=48, STH=41, LEH=42, STV=45, CKH=4
 // Power: TPS65185 PMIC via PCA9535 IO expander
+//
+// KNOWN LIMITATION: Cache line size (32B vs 64B)
+// The epdiy library expects CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y (64-byte
+// data cache lines) for optimal DMA performance. However, all pre-built
+// Arduino ESP32-S3 SDK variants (including qio_opi used here) ship with
+// CONFIG_ESP32S3_DATA_CACHE_LINE_32B=y. This causes epdiy to auto-halve
+// the LCD pixel clock at startup, roughly doubling display refresh time.
+// Fixing this would require a custom Arduino SDK build with 64-byte cache
+// lines enabled via menuconfig, or switching to the ESP-IDF framework.
 
 // BQ25896 Power Path Management (charger) + BQ27220 Fuel Gauge
 // I2C bus is shared with epdiy - protected by i2cLock mutex

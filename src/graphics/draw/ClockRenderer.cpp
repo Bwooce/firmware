@@ -221,21 +221,50 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
         scaleInitialized = true;
     }
 
-    // calculate hours:minutes string width
+    // Calculate total rendered width of the time string for centering.
     size_t len = strlen(timeString);
-    uint16_t timeStringWidth = len * 5;
-
+    uint16_t digitCellWidth = segmentWidth + (segmentHeight * 2) + 4;
+    uint16_t colonCellWidth = segmentHeight + 6;
+    if (scale >= 2.0f) {
+        colonCellWidth += (uint16_t)(4.5f * scale);
+    }
+    uint16_t timeStringWidth = 0;
     for (size_t i = 0; i < len; i++) {
-        char character = timeString[i];
-
-        if (character == ':') {
-            timeStringWidth += segmentHeight;
-        } else {
-            timeStringWidth += segmentWidth + (segmentHeight * 2) + 4;
-        }
+        uint16_t charWidth = (timeString[i] == ':') ? colonCellWidth : digitCellWidth;
+        charWidth += 5; // inter-character spacing
+        timeStringWidth += charWidth;
     }
 
-    uint16_t hourMinuteTextX = (display->getWidth() / 2) - (timeStringWidth / 2);
+    // Compute visual left margin of a digit within its fixed-width cell.
+    // Digits like "1" only draw right-side segments, leaving dead space on the
+    // left. "3" has no left verticals but its horizontal segments extend partway.
+    // All digits have right-side segments so the right margin is always 0.
+    auto digitLeftMargin = [&](uint8_t digit) -> uint16_t {
+        bool hasLeftVertical = pgm_read_byte(&digitSegments[digit][4]) ||
+                               pgm_read_byte(&digitSegments[digit][5]); // seg 5 or 6
+        if (hasLeftVertical)
+            return 0;
+        bool hasHorizontal = pgm_read_byte(&digitSegments[digit][0]) ||
+                             pgm_read_byte(&digitSegments[digit][3]) ||
+                             pgm_read_byte(&digitSegments[digit][6]); // seg 1, 4, or 7
+        if (hasHorizontal)
+            return (uint16_t)(segmentHeight / 2) + 2; // horizontal segment left triangle
+        return (uint16_t)segmentHeight + (uint16_t)segmentWidth + 4; // e.g. "1"
+    };
+
+    // Compute visual margins of the first and last digits. The last digit's
+    // left margin acts as effective right-side dead space for the whole string
+    // (the drawn pixels are at the cell's right edge, but there's a visual gap
+    // before them). Balancing both ends keeps the visual weight centred.
+    int16_t firstMargin = 0;
+    int16_t lastMargin = 0;
+    if (len > 0 && timeString[0] != ':')
+        firstMargin = digitLeftMargin(timeString[0] - '0');
+    if (len > 0 && timeString[len - 1] != ':')
+        lastMargin = digitLeftMargin(timeString[len - 1] - '0');
+
+    int16_t visualAdjust = (lastMargin - firstMargin) / 2;
+    uint16_t hourMinuteTextX = (display->getWidth() - timeStringWidth) / 2 + visualAdjust;
     uint16_t startingHourMinuteTextX = hourMinuteTextX;
 
     uint16_t hourMinuteTextY = (display->getHeight() / 2) - (((segmentWidth * 2) + (segmentHeight * 3) + 8) / 2) + 2;
@@ -368,7 +397,9 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         double minuteAngleOffset = ((double)second / 60) * degreesPerMinuteOrSecond;
         double minuteAngle = radians(minuteBaseAngle + minuteAngleOffset);
 
+#ifndef USE_EINK
         double secondAngle = radians(second * degreesPerMinuteOrSecond);
+#endif
 
         double hourX = sin(-hourAngle) * (hourHandNoonY - centerY) + noonX;
         double hourY = cos(-hourAngle) * (hourHandNoonY - centerY) + centerY;
@@ -376,8 +407,10 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         double minuteX = sin(-minuteAngle) * (minuteHandNoonY - centerY) + noonX;
         double minuteY = cos(-minuteAngle) * (minuteHandNoonY - centerY) + centerY;
 
+#ifndef USE_EINK
         double secondX = sin(-secondAngle) * (secondHandNoonY - centerY) + noonX;
         double secondY = cos(-secondAngle) * (secondHandNoonY - centerY) + centerY;
+#endif
 
         display->setFont(FONT_MEDIUM);
 

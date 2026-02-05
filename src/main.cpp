@@ -379,6 +379,45 @@ void setup()
 
     concurrency::hasBeenSetup = true;
 
+#ifdef LILYGO_T5_S3_EPAPER_PRO
+    // LilyGo T5 S3 E-Paper Pro early init (matches SDK init sequence)
+    // 1. Release GPIO holds from deep sleep
+    gpio_hold_dis((gpio_num_t)LORA_RESET);
+    gpio_hold_dis((gpio_num_t)9); // GT911 Touch RST
+    gpio_deep_sleep_hold_dis();
+
+    // 2. Set SPI CS pins HIGH before power-on to prevent bus contention
+    gpio_reset_pin((gpio_num_t)LORA_CS); // GPIO 46 is a strapping pin
+    pinMode(LORA_CS, OUTPUT);
+    digitalWrite(LORA_CS, HIGH);
+    pinMode(SDCARD_CS, OUTPUT);
+    digitalWrite(SDCARD_CS, HIGH);
+    pinMode(LORA_RESET, INPUT); // Float NRESET until power is stable
+
+    // 3. Power cycle LoRa/GPS via PCA9535 P00.
+    //    PCA9535 retains output state across ESP32 soft resets,
+    //    so explicitly cycle power for a clean radio startup.
+    Wire.begin(I2C_SDA, I2C_SCL);
+    Wire.beginTransmission(0x20); // PCA9535 address
+    Wire.write(0x06);             // Configuration Register Port 0
+    Wire.write(0x00);             // All pins as outputs
+    if (Wire.endTransmission() == 0) {
+        // Power OFF (P00 LOW)
+        Wire.beginTransmission(0x20);
+        Wire.write(0x02);
+        Wire.write(0xFE); // P00=LOW (LoRa/GPS VCC3V3 off), others HIGH
+        Wire.endTransmission();
+        delay(100);
+
+        // Power ON (P00 HIGH)
+        Wire.beginTransmission(0x20);
+        Wire.write(0x02);
+        Wire.write(0xFF); // All HIGH
+        Wire.endTransmission();
+    }
+    delay(1500); // SDK uses 1500ms after power-on
+#endif
+
     meshtastic_Config_DisplayConfig_OledType screen_model =
         meshtastic_Config_DisplayConfig_OledType::meshtastic_Config_DisplayConfig_OledType_OLED_AUTO;
     OLEDDISPLAY_GEOMETRY screen_geometry = GEOMETRY_128_64;
@@ -977,6 +1016,7 @@ void setup()
         RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_NO_AXP192); // Record a hardware fault for missing hardware
 #endif
 
+
 #if !MESHTASTIC_EXCLUDE_I2C
 // Don't call screen setup until after nodedb is setup (because we need
 // the current region name)
@@ -1076,6 +1116,7 @@ void setup()
     nodeDB->notifyObservers(true);
 
     LOG_INFO("=== SETUP COMPLETE === Now entering main loop");
+
 }
 
 #endif

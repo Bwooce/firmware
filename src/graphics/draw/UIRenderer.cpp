@@ -23,6 +23,11 @@ static uint32_t lastSwitchTime = 0;
 #endif
 namespace graphics
 {
+
+// Gap (in pixels) between a scaled icon and its adjacent text
+static constexpr int ICON_TEXT_GAP_SCALED = 4; // Used when icon is drawn via drawScaledXBitmap (High/Large)
+static constexpr int ICON_TEXT_GAP_UNSCALED = 3; // Used when icon is drawn at native 1x size (Low)
+
 NodeNum UIRenderer::currentFavoriteNodeNum = 0;
 std::vector<meshtastic_NodeInfoLite *> graphics::UIRenderer::favoritedNodes;
 
@@ -83,11 +88,10 @@ void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const mesht
     } else {
         snprintf(textString, sizeof(textString), "%u sats", gps->getNumSatellites());
     }
-    if (currentResolution >= ScreenResolution::High) {
-        display->drawString(x + 18, y, textString);
-    } else {
-        display->drawString(x + 11, y, textString);
-    }
+    int iconGap = (currentResolution >= ScreenResolution::High)
+                       ? imgSatellite_width * NodeListRenderer::getIconScale() + ICON_TEXT_GAP_SCALED
+                       : imgSatellite_width + ICON_TEXT_GAP_UNSCALED;
+    display->drawString(x + iconGap, y, textString);
 }
 
 // Draw status when GPS is disabled or not present
@@ -280,8 +284,11 @@ void UIRenderer::drawNodes(OLEDDisplay *display, int16_t x, int16_t y, const mes
         display->drawFastImage(x, y + 1, 8, 8, imgUser);
     }
 #endif
-    int string_offset = (currentResolution >= ScreenResolution::High) ? 9 : 0;
-    display->drawString(x + 10 + string_offset, y - 2, usersString);
+    const int imgUserWidth = 8;
+    int iconGap = (currentResolution >= ScreenResolution::High)
+                      ? imgUserWidth * NodeListRenderer::getIconScale() + ICON_TEXT_GAP_SCALED
+                      : imgUserWidth + ICON_TEXT_GAP_UNSCALED;
+    display->drawString(x + iconGap, y - 2, usersString);
 }
 
 // **********************
@@ -609,8 +616,10 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
             displayLine = config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT ? "No GPS" : "GPS off";
         }
         drawSatelliteIcon(display, x, getTextPositions(display)[line]);
-        int xOffset = (currentResolution >= ScreenResolution::High) ? 6 : 0;
-        display->drawString(x + 11 + xOffset, getTextPositions(display)[line], displayLine);
+        int satIconGap = (currentResolution >= ScreenResolution::High)
+                             ? imgSatellite_width * NodeListRenderer::getIconScale() + ICON_TEXT_GAP_SCALED
+                             : imgSatellite_width + ICON_TEXT_GAP_UNSCALED;
+        display->drawString(x + satIconGap, getTextPositions(display)[line], displayLine);
     } else {
         UIRenderer::drawGps(display, 0, getTextPositions(display)[line], gpsStatus);
     }
@@ -993,8 +1002,10 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             displayLine = config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT ? "No GPS" : "GPS off";
         }
         drawSatelliteIcon(display, x, getTextPositions(display)[line]);
-        int xOffset = (currentResolution >= ScreenResolution::High) ? 6 : 0;
-        display->drawString(x + 11 + xOffset, getTextPositions(display)[line++], displayLine);
+        int satIconGap = (currentResolution >= ScreenResolution::High)
+                             ? imgSatellite_width * NodeListRenderer::getIconScale() + ICON_TEXT_GAP_SCALED
+                             : imgSatellite_width + ICON_TEXT_GAP_UNSCALED;
+        display->drawString(x + satIconGap, getTextPositions(display)[line++], displayLine);
     } else {
         // Onboard GPS
         UIRenderer::drawGps(display, 0, getTextPositions(display)[line++], gpsStatus);

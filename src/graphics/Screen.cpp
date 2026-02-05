@@ -418,6 +418,10 @@ Screen::~Screen()
 void Screen::doDeepSleep()
 {
 #ifdef USE_EINK
+    // Force screenOn=true so handleSetOn() will actually execute the screensaver rendering.
+    // If the screen is already off (timeout, PWR button), the (on != screenOn) guard in
+    // handleSetOn would skip the sleep frame entirely.
+    screenOn = true;
     setOn(false, graphics::UIRenderer::drawDeepSleepFrame);
 #else
     // Without E-Ink display:

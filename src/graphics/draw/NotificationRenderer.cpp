@@ -244,7 +244,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     static uint32_t selectedNodenum = 0;
 
     // === Layout Configuration ===
-    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 6 : 2;
+    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 16 : 2;
     alertBannerOptions = nodeDB->getNumMeshNodes() - 1;
 
     // let the box drawing function calculate the widths?
@@ -291,7 +291,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
 
     uint16_t totalLines = lineCount + alertBannerOptions;
     uint16_t screenHeight = display->height();
-    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL + 2 : FONT_HEIGHT_SMALL - 3;
+    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL * 2 : FONT_HEIGHT_SMALL - 3;
     uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
@@ -344,7 +344,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
 void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
     // === Layout Configuration ===
-    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 6 : 2;
+    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 16 : 2;
 
     uint16_t optionWidths[alertBannerOptions] = {0};
     uint16_t maxWidth = 0;
@@ -421,7 +421,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     uint16_t totalLines = lineCount + alertBannerOptions;
 
     uint16_t screenHeight = display->height();
-    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL + 2 : FONT_HEIGHT_SMALL - 3;
+    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL * 2 : FONT_HEIGHT_SMALL - 3;
     uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
@@ -444,10 +444,6 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
             firstOptionToShow = 0;
         }
     }
-    // Useful log line for troubleshooting:
-    /* LOG_WARN("alertBannerOptions: %u, curSelected: %u, visibleTotalLines: %u, lineCount: %u, firstOptionToShow: %u",
-             alertBannerOptions, curSelected, visibleTotalLines, lineCount, firstOptionToShow); */
-
     for (int i = firstOptionToShow; i < alertBannerOptions && linesShown < visibleTotalLines; i++, linesShown++) {
         if (i == curSelected) {
             if (currentResolution >= ScreenResolution::High) {
@@ -479,8 +475,8 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     bool is_picker = false;
     uint16_t lineCount = 0;
     // Layout Configuration - scale padding for Large screens
-    const uint16_t hPadding = (currentResolution == ScreenResolution::Large) ? 10 : 5;
-    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 6 : 2;
+    const uint16_t hPadding = (currentResolution == ScreenResolution::Large) ? 24 : 5;
+    const uint16_t vPadding = (currentResolution == ScreenResolution::Large) ? 16 : 2;
     bool needs_bell = false;
     uint16_t lineWidths[totalLines] = {0};
     uint16_t lineLengths[totalLines] = {0};
@@ -541,7 +537,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     }
 
     uint16_t screenHeight = display->height();
-    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL + 2 : FONT_HEIGHT_SMALL - 3;
+    uint8_t effectiveLineHeight = (currentResolution == ScreenResolution::Large) ? FONT_HEIGHT_SMALL * 2 : FONT_HEIGHT_SMALL - 3;
     uint8_t visibleTotalLines = std::min<uint8_t>(lineCount, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint16_t contentHeight = visibleTotalLines * effectiveLineHeight;
     uint16_t boxHeight = contentHeight + vPadding * 2;
