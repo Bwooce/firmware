@@ -199,7 +199,8 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
         curSelected++;
     } else if (inEvent.inputEvent == INPUT_BROKER_LEFT) {
         curSelected--;
-    } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
+    } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG ||
+                inEvent.inputEvent == INPUT_BROKER_HOME) &&
                alertBannerUntil != 0) {
         resetBanner();
         return;
@@ -274,7 +275,8 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
         alertBannerCallback(selectedNodenum);
         resetBanner();
         return;
-    } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
+    } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG ||
+                inEvent.inputEvent == INPUT_BROKER_HOME) &&
                alertBannerUntil != 0) {
         resetBanner();
         return;
@@ -396,7 +398,8 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
             }
             resetBanner();
             return;
-        } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
+        } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG ||
+                    inEvent.inputEvent == INPUT_BROKER_HOME) &&
                    alertBannerUntil != 0) {
             resetBanner();
             return;
@@ -408,7 +411,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
             curSelected = 0;
     } else {
         if (inEvent.inputEvent == INPUT_BROKER_SELECT || inEvent.inputEvent == INPUT_BROKER_ALT_LONG ||
-            inEvent.inputEvent == INPUT_BROKER_CANCEL) {
+            inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_HOME) {
             resetBanner();
             return;
         }

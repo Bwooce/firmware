@@ -2,19 +2,35 @@
 #define _VARIANT_LILYGO_T5_S3_EPAPER_PRO_H_
 
 // ===========================================================================
-// LilyGo T5 S3 E-Paper Pro (v1.0) - Hardware Reference
+// LilyGo T5 S3 E-Paper Pro - Hardware Reference
 // https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO
+// https://wiki.lilygo.cc/get_started/en/Wearable/T5-E-Paper-S3-Pro/
 // ===========================================================================
+//
+// Hardware Revisions (see https://wiki.lilygo.cc):
+//   H752      (v1.0-240810) - Original, no longer sold. NO GPS, no TPS65185.
+//                             Completely different pin assignments (touch, LoRa,
+//                             frontlight, button). NOT compatible with this variant.
+//   H752-01   (v1.0-241224) - Adds TPS65185 e-paper PMIC, GPS (MIA-M10Q per
+//                             wiki), epdiy v7 support, partial refresh.
+//   H752-02                 - Same pins as H752-01. Ships with L76K GPS instead
+//                             of MIA-M10Q (confirmed via serial log detection).
+//                             Sold by LilyGo (2026) and Rokland.
+//
+// WARNING: This variant ONLY supports H752-01 and H752-02.
+// The original H752 has different pin assignments and will not work.
+// Both supported revisions use PCA9535PW IO expander, same pins, same PMIC.
+// GPS module varies (L76K or MIA-M10Q) but both use UART2 on GPIO 43/44.
 //
 // MCU: ESP32-S3 (dual-core LX7, 240 MHz)
 // Flash: 16MB / PSRAM: 8MB OPI
 // Display: ED047TC1 4.7" e-paper (960x540, 16-level grayscale)
 // Radio: SX1262 LoRa (sub-GHz)
-// GPS: L76K or MIA-M10Q (UART2)
+// GPS: L76K (H752-02) or MIA-M10Q (H752-01) on UART2
 // Touch: GT911 capacitive (5-point multi-touch)
 // Power: BQ25896 charger + BQ27220 fuel gauge
 // RTC: PCF8563
-// IO Expander: PCA9535 (16-pin, I2C address 0x20)
+// IO Expander: PCA9535PW (16-pin, I2C address 0x20)
 //
 // ===========================================================================
 // Initialization Sequence & I2C Bus Sharing (CRITICAL)
@@ -297,6 +313,9 @@
 
 // E-Paper frontlight enable (directly controllable, active HIGH)
 #define PIN_EINK_EN 11
+
+// Frontlight control - called from Screen::setOn(false) to turn off backlight on sleep
+void frontlightOff();
 
 // E-Paper ED047TC1 4.7" 960x540
 // Uses 16-bit PARALLEL interface via LCD peripheral (NOT SPI).

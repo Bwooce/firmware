@@ -51,6 +51,42 @@
 static TouchDrvGT911 touchDriver;
 static bool touchInitialized = false;
 
+// Frontlight state - shared between button thread and display sleep hook
+static uint8_t frontlightLevel = 0;  // 0=off, 1=low, 2=med, 3=high
+static uint32_t lastFrontlightPress = 0;  // millis() of last button press
+
+/**
+ * Frontlight PWM levels matching LilyGo SDK
+ */
+static const uint8_t BRIGHTNESS_OFF = 0;
+static const uint8_t BRIGHTNESS_LOW = 50;
+static const uint8_t BRIGHTNESS_MED = 100;
+static const uint8_t BRIGHTNESS_HIGH = 230;
+
+static const uint8_t brightnessValues[] = {BRIGHTNESS_OFF, BRIGHTNESS_LOW, BRIGHTNESS_MED, BRIGHTNESS_HIGH};
+static const char *brightnessNames[] = {"OFF", "LOW", "MEDIUM", "HIGH"};
+
+/**
+ * Set frontlight to a specific level and apply PWM.
+ * Called by button thread and by display sleep hook.
+ */
+static void setFrontlightLevel(uint8_t level)
+{
+    frontlightLevel = level;
+    analogWrite(PIN_EINK_EN, brightnessValues[level]);
+    LOG_INFO("Frontlight: %s (level %d, PWM %d)", brightnessNames[level], level, brightnessValues[level]);
+}
+
+/**
+ * Turn off frontlight. Called from Screen::setOn(false) when display goes dark.
+ */
+void frontlightOff()
+{
+    if (frontlightLevel != 0) {
+        setFrontlightLevel(0);
+    }
+}
+
 /**
  * PCA9535 P12 button handler - frontlight brightness control
  *
@@ -60,7 +96,10 @@ static bool touchInitialized = false;
  * Always polls button state at 50ms intervals (not interrupt-driven, since epdiy
  * also uses the PCA9535 interrupt and may clear it before we see button events).
  *
- * Short press = cycle frontlight brightness (off → low → medium → high → off)
+ * Frontlight brightness cycling:
+ *   - If off: first press turns on to LOW
+ *   - Within 1s of last press: cycles LOW → MED → HIGH → OFF
+ *   - After 1s idle with light on: next press turns OFF
  * Uses analogWrite() PWM on GPIO 11 (PIN_EINK_EN) for brightness control.
  *
  * WORKAROUND for epdiy P12/STV pin conflict:
@@ -77,16 +116,10 @@ static bool touchInitialized = false;
 class PCA9535ButtonThread : public concurrency::OSThread
 {
   public:
-    // Frontlight PWM levels matching LilyGo SDK
-    static const uint8_t BRIGHTNESS_OFF = 0;
-    static const uint8_t BRIGHTNESS_LOW = 50;
-    static const uint8_t BRIGHTNESS_MED = 100;
-    static const uint8_t BRIGHTNESS_HIGH = 230;
-
     PCA9535ButtonThread() : OSThread("PCA9535Btn")
     {
         // Start with frontlight off
-        brightnessLevel = 0;
+        frontlightLevel = 0;
         analogWrite(PIN_EINK_EN, BRIGHTNESS_OFF);
     }
 
@@ -153,9 +186,9 @@ class PCA9535ButtonThread : public concurrency::OSThread
             uint32_t duration = millis() - pressStartTime;
             LOG_DEBUG("P12 button released after %lu ms", (unsigned long)duration);
 
-            // Cycle frontlight brightness on short press (50ms - 2s)
+            // Handle frontlight on short press (50ms - 2s)
             if (duration >= 50 && duration <= 2000) {
-                cycleBrightness();
+                handleFrontlightPress();
             }
         }
 
@@ -163,44 +196,27 @@ class PCA9535ButtonThread : public concurrency::OSThread
     }
 
   private:
-    void cycleBrightness()
+    void handleFrontlightPress()
     {
-        brightnessLevel = (brightnessLevel + 1) % 4;
-        uint8_t pwmVal;
-        const char *levelName;
-
-        switch (brightnessLevel) {
-            case 0:
-                pwmVal = BRIGHTNESS_OFF;
-                levelName = "OFF";
-                break;
-            case 1:
-                pwmVal = BRIGHTNESS_LOW;
-                levelName = "LOW";
-                break;
-            case 2:
-                pwmVal = BRIGHTNESS_MED;
-                levelName = "MEDIUM";
-                break;
-            case 3:
-                pwmVal = BRIGHTNESS_HIGH;
-                levelName = "HIGH";
-                break;
-            default:
-                pwmVal = BRIGHTNESS_OFF;
-                levelName = "OFF";
-                break;
+        uint32_t now = millis();
+        if (frontlightLevel == 0) {
+            // Off → turn on to LOW
+            setFrontlightLevel(1);
+        } else if ((now - lastFrontlightPress) < 1000) {
+            // Within 1s of last press → cycle: low→med→high→off
+            uint8_t next = (frontlightLevel + 1) % 4;
+            setFrontlightLevel(next);
+        } else {
+            // >1s since last press with light on → turn off
+            setFrontlightLevel(0);
         }
-
-        analogWrite(PIN_EINK_EN, pwmVal);
-        LOG_INFO("Frontlight: %s (level %d, PWM %d)", levelName, brightnessLevel, pwmVal);
+        lastFrontlightPress = now;
     }
 
-    static const uint8_t DEBOUNCE_COUNT = 2;  // 2 consecutive reads = 100ms (reduced from 3)
+    static const uint8_t DEBOUNCE_COUNT = 2;  // 2 consecutive reads = 100ms
     bool btnPressed = false;
     uint32_t pressStartTime = 0;
     uint8_t debounceCount = 0;
-    uint8_t brightnessLevel = 0;  // 0=off, 1=low, 2=med, 3=high
     bool stuckRecovery = false;   // True when recovering from stuck state
 };
 

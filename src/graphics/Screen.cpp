@@ -720,6 +720,10 @@ void Screen::setOn(bool on, FrameCallback einkScreensaver)
     if (cardKbI2cImpl)
         cardKbI2cImpl->toggleBacklight(on);
 #endif
+#if defined(LILYGO_T5_S3_EPAPER_PRO)
+    if (!on)
+        frontlightOff();
+#endif
     if (!on)
         // We handle off commands immediately, because they might be called because the CPU is shutting down
         handleSetOn(false, einkScreensaver);
