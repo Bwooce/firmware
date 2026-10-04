@@ -18,11 +18,15 @@
 #ifdef LILYGO_T5_S3_EPAPER_PRO
 
 #include "I2CLock.h"
+#include "PowerFSM.h"
 #include "concurrency/OSThread.h"
 #include "input/InputBroker.h"
 #include "input/TouchScreenImpl1.h"
 #include <Wire.h>
 #include <TouchDrvGT911.hpp>
+
+// epdiy for display clear on shutdown
+#include "epdiy.h"
 
 // GT911 touch pins from LilyGo SDK
 #define GT911_INT_PIN   3
@@ -52,7 +56,8 @@ static TouchDrvGT911 touchDriver;
 static bool touchInitialized = false;
 
 // Frontlight state - shared between button thread and display sleep hook
-static uint8_t frontlightLevel = 0;  // 0=off, 1=low, 2=med, 3=high
+static uint8_t frontlightLevel = 0;       // 0=off, 1=low, 2=med, 3=high
+static uint8_t savedFrontlightLevel = 0;  // Level before sleep, restored on wake
 static uint32_t lastFrontlightPress = 0;  // millis() of last button press
 
 /**
@@ -79,11 +84,23 @@ static void setFrontlightLevel(uint8_t level)
 
 /**
  * Turn off frontlight. Called from Screen::setOn(false) when display goes dark.
+ * Saves the current level so it can be restored on wake.
  */
 void frontlightOff()
 {
     if (frontlightLevel != 0) {
+        savedFrontlightLevel = frontlightLevel;
         setFrontlightLevel(0);
+    }
+}
+
+/**
+ * Restore frontlight to its level before sleep. Called from Screen::setOn(true).
+ */
+void frontlightRestore()
+{
+    if (savedFrontlightLevel != 0) {
+        setFrontlightLevel(savedFrontlightLevel);
     }
 }
 
@@ -211,6 +228,10 @@ class PCA9535ButtonThread : public concurrency::OSThread
             setFrontlightLevel(0);
         }
         lastFrontlightPress = now;
+        // Update saved level so wake restores the new setting
+        savedFrontlightLevel = frontlightLevel;
+        // Reset the PowerFSM sleep timer (keep screen on while adjusting light)
+        powerFSM.trigger(EVENT_INPUT);
     }
 
     static const uint8_t DEBOUNCE_COUNT = 2;  // 2 consecutive reads = 100ms
@@ -350,6 +371,66 @@ void lateInitVariant()
                  "which may cause reboot loops if a serial monitor is connected.",
                  (unsigned long)config.power.ls_secs);
     }
+}
+
+/**
+ * Variant-specific shutdown for T5 S3 E-Paper Pro.
+ *
+ * Called from cpuDeepSleep() just before esp_deep_sleep_start().
+ * By this point, doDeepSleep() has already:
+ *   - Put SX1262 to sleep
+ *   - Called PPM->shutdown() (sets BATFET_DIS with default delay)
+ *   - Called Wire.end() (I2C bus closed)
+ *   - Set I2C pins to ANALOG mode
+ *
+ * We re-init I2C to:
+ *   1. Clear the e-paper display (so it doesn't show stale content)
+ *   2. Force immediate BATFET disconnect (clear BATFET_DLY, set BATFET_DIS)
+ *
+ * If BATFET disconnects (battery-only operation), power dies here.
+ * If USB is connected (BATFET can't disconnect), we fall through to
+ * esp_deep_sleep_start() as a backup.
+ */
+void variant_shutdown()
+{
+    // Re-init I2C - doDeepSleep() already called Wire.end()
+    Wire.begin(I2C_SDA, I2C_SCL);
+
+    // Clear e-paper display. doDeepSleep() already drew a "Sleeping" frame,
+    // but for a true power-off we want a blank screen.
+    // epd_poweron/clear/poweroff use PCA9535+TPS65185 via I2C.
+    epd_poweron();
+    epd_clear();
+    epd_poweroff();
+
+    // Turn off frontlight
+    analogWrite(PIN_EINK_EN, 0);
+
+    // Force immediate BATFET disconnect via BQ25896 register 0x09.
+    // PPM->shutdown() already set BATFET_DIS (bit 5), but BATFET_DLY (bit 3)
+    // defaults to 0 (immediate). Re-assert both to be sure:
+    //   bit 5 = 1 (BATFET_DIS: force BATFET off)
+    //   bit 3 = 0 (BATFET_DLY: disconnect immediately, not after 10s delay)
+    Wire.beginTransmission(0x6B); // BQ25896 address
+    Wire.write(0x09);
+    Wire.endTransmission(false);
+    if (Wire.requestFrom((uint8_t)0x6B, (uint8_t)1) == 1) {
+        uint8_t reg09 = Wire.read();
+        reg09 |= (1 << 5);  // BATFET_DIS = 1
+        reg09 &= ~(1 << 3); // BATFET_DLY = 0 (immediate)
+        Wire.beginTransmission(0x6B);
+        Wire.write(0x09);
+        Wire.write(reg09);
+        Wire.endTransmission();
+    }
+
+    // If on battery, power should die within milliseconds.
+    // Spin-wait to avoid falling through to esp_deep_sleep_start().
+    delay(3000);
+
+    // If we reach here, BATFET didn't disconnect (USB is connected).
+    // Clean up I2C before falling through to esp_deep_sleep_start().
+    Wire.end();
 }
 
 #endif // LILYGO_T5_S3_EPAPER_PRO

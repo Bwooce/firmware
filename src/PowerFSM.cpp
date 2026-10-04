@@ -131,6 +131,11 @@ static void lsIdle()
 #else
                 bool pressed = false;
 #endif
+#ifdef PCA9535_INT
+                // PCA9535 IO expander interrupt is active LOW; treat as button press
+                if (!pressed)
+                    pressed = !digitalRead(PCA9535_INT);
+#endif
                 if (pressed) { // If we woke because of press, instead generate a PRESS event.
                     powerFSM.trigger(EVENT_PRESS);
                 } else {
@@ -175,6 +180,7 @@ static void darkEnter()
 {
     LOG_POWERFSM("State: darkEnter");
     setBluetoothEnable(true);
+    setBluetoothIdleMode(true);
     if (screen)
         screen->setOn(false);
 }
@@ -206,6 +212,7 @@ static void powerEnter()
         if (screen)
             screen->setOn(true);
         setBluetoothEnable(true);
+        setBluetoothIdleMode(false);
         // within enter() the function getState() returns the state we came from
     }
 }
@@ -232,6 +239,7 @@ static void onEnter()
     if (screen)
         screen->setOn(true);
     setBluetoothEnable(true);
+    setBluetoothIdleMode(false);
 }
 
 static void onIdle()

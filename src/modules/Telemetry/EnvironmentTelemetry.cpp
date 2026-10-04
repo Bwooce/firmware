@@ -571,6 +571,20 @@ bool EnvironmentTelemetryModule::getEnvironmentTelemetry(meshtastic_Telemetry *m
     valid = valid || get_metrics;
     hasSensor = true;
 #endif
+
+#if defined(HAS_BQ27220) && HAS_BQ27220
+    // BQ27220 fuel gauge can report battery current if no dedicated current sensor is present
+    if (!m->variant.environment_metrics.has_current) {
+        int16_t bqCurrent = getBQ27220CurrentMA();
+        if (bqCurrent != INT16_MIN) {
+            m->variant.environment_metrics.has_current = true;
+            m->variant.environment_metrics.current = (float)bqCurrent;
+            valid = true;
+            hasSensor = true;
+        }
+    }
+#endif
+
     return valid && hasSensor;
 }
 

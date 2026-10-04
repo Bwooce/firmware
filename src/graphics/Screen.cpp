@@ -454,7 +454,8 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             dispdev->displayOn();
 #endif
 
-#ifdef PIN_EINK_EN
+#if defined(PIN_EINK_EN) && !defined(LILYGO_T5_S3_EPAPER_PRO)
+            // T5S3 E-Paper Pro uses PWM via analogWrite for frontlight (handled by frontlightRestore)
             if (uiconfig.screen_brightness == 1)
                 digitalWrite(PIN_EINK_EN, HIGH);
 #elif defined(PCA_PIN_EINK_EN)
@@ -501,7 +502,8 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             setScreensaverFrames(einkScreensaver);
 #endif
 
-#ifdef PIN_EINK_EN
+#if defined(PIN_EINK_EN) && !defined(LILYGO_T5_S3_EPAPER_PRO)
+            // T5S3 E-Paper Pro uses PWM via analogWrite for frontlight (handled by frontlightOff)
             digitalWrite(PIN_EINK_EN, LOW);
 #elif defined(PCA_PIN_EINK_EN)
             io.digitalWrite(PCA_PIN_EINK_EN, LOW);
@@ -723,6 +725,8 @@ void Screen::setOn(bool on, FrameCallback einkScreensaver)
 #if defined(LILYGO_T5_S3_EPAPER_PRO)
     if (!on)
         frontlightOff();
+    else
+        frontlightRestore();
 #endif
     if (!on)
         // We handle off commands immediately, because they might be called because the CPU is shutting down

@@ -268,6 +268,15 @@ NodeDB::NodeDB()
         config.security.is_managed = config.device.is_managed;
     }
 
+#ifdef FORCE_SERIAL_ENABLED
+    // Force serial debug/API enabled for development boards.
+    // The iOS app setting for serial_enabled doesn't persist reliably.
+    if (!config.security.serial_enabled) {
+        LOG_WARN("Forcing serial_enabled=true (was disabled in saved config)");
+        config.security.serial_enabled = true;
+    }
+#endif
+
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
 
     if (!owner.is_licensed && config.lora.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET) {
@@ -910,6 +919,11 @@ void NodeDB::installDefaultModuleConfig()
     moduleConfig.ambient_lighting.green = (myNodeInfo.my_node_num & 0x00FF00) >> 8;
     moduleConfig.ambient_lighting.blue = myNodeInfo.my_node_num & 0x0000FF;
 
+#ifdef USERPREFS_POWER_MEASUREMENT_ENABLED
+    moduleConfig.telemetry.power_measurement_enabled = true;
+    moduleConfig.telemetry.power_screen_enabled = true;
+#endif
+
     initModuleConfigIntervals();
 }
 
@@ -1360,6 +1374,13 @@ void NodeDB::loadFromDisk()
             LOG_INFO("Loaded saved moduleConfig version %d", moduleConfig.version);
         }
     }
+    // Use ESP_LOGI directly - Meshtastic LOG_* is suppressed if serial_enabled=false
+    ESP_LOGI("NodeDB", "Config serial_enabled=%d (has_security=%d, has_lora=%d)",
+             config.security.serial_enabled, config.has_security, config.has_lora);
+    ESP_LOGI("NodeDB", "ModuleConfig telemetry: has=%d, power_meas=%d, power_screen=%d, env_meas=%d, env_screen=%d",
+             moduleConfig.has_telemetry, moduleConfig.telemetry.power_measurement_enabled,
+             moduleConfig.telemetry.power_screen_enabled, moduleConfig.telemetry.environment_measurement_enabled,
+             moduleConfig.telemetry.environment_screen_enabled);
 
     state = loadProto(channelFileName, meshtastic_ChannelFile_size, sizeof(meshtastic_ChannelFile), &meshtastic_ChannelFile_msg,
                       &channelFile);

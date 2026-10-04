@@ -125,4 +125,31 @@ class Power : private concurrency::OSThread
 
 void battery_adcEnable();
 
+/// Get battery current from BQ27220 fuel gauge (mA). Returns INT16_MIN if not available.
+int16_t getBQ27220CurrentMA();
+
+/// Extended BQ27220 telemetry data for power profiling
+struct BQ27220TelemetryData {
+    bool valid;
+    int16_t instantaneousCurrent; // mA (positive=charging, negative=discharging)
+    int16_t averageCurrent;       // mA (rolling average)
+    int16_t maxLoadCurrent;       // mA (peak discharge current)
+    int16_t standbyCurrent;       // mA (sleep/standby baseline)
+    int16_t averagePower;         // mW (negative=discharge, positive=charge)
+    uint16_t remainingCapacity;   // mAh
+    uint16_t voltage;             // mV
+};
+
+/// Get extended BQ27220 telemetry. Sets valid=false if fuel gauge unavailable.
+BQ27220TelemetryData getBQ27220Telemetry();
+
+/// Get BQ25896 charger system voltage (VSYS) in mV. Returns 0 if unavailable.
+uint16_t getBQ25896SystemVoltage();
+
+/// Get BQ25896 VBUS voltage in mV. Returns 0 if unavailable.
+uint16_t getBQ25896VbusVoltage();
+
+/// Get BQ25896 charge current in mA. Returns 0 if not charging or unavailable.
+uint16_t getBQ25896ChargeCurrent();
+
 extern Power *power;

@@ -15,6 +15,8 @@
 #include "power.h"
 #include "sleep.h"
 #include "target_specific.h"
+#include "graphics/ScreenFonts.h"
+#include "graphics/SharedUIDisplay.h"
 #include <OLEDDisplay.h>
 #include <OLEDDisplayUi.h>
 
@@ -95,13 +97,17 @@ bool HealthTelemetryModule::wantUIFrame()
 
 void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
+    display->clear();
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
+    int line = 1;
+
+    const char *titleStr = "Health";
+
+    graphics::drawCommonHeader(display, x, y, titleStr);
 
     if (lastMeasurementPacket == nullptr) {
-        // If there's no valid packet, display "Health"
-        display->drawString(x, y, "Health");
-        display->drawString(x, y += _fontHeight(FONT_SMALL), "No measurement");
+        display->drawString(x, graphics::getTextPositions(display)[line++], "No measurement");
         return;
     }
 
@@ -112,7 +118,7 @@ void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
 
     const meshtastic_Data &p = lastMeasurementPacket->decoded;
     if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &lastMeasurement)) {
-        display->drawString(x, y, "Measurement Error");
+        display->drawString(x, graphics::getTextPositions(display)[line++], "Measurement Error");
         LOG_ERROR("Unable to decode last packet");
         return;
     }
@@ -120,7 +126,7 @@ void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     // Display "Health From: ..." on its own
     char headerStr[64];
     snprintf(headerStr, sizeof(headerStr), "Health From: %s(%ds)", lastSender, (int)agoSecs);
-    display->drawString(x, y, headerStr);
+    display->drawString(x, graphics::getTextPositions(display)[line++], headerStr);
 
     char last_temp[16];
     if (moduleConfig.telemetry.environment_display_fahrenheit) {
@@ -133,17 +139,18 @@ void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     // Continue with the remaining details
     char tempStr[32];
     snprintf(tempStr, sizeof(tempStr), "Temp: %s", last_temp);
-    display->drawString(x, y += _fontHeight(FONT_SMALL), tempStr);
+    display->drawString(x, graphics::getTextPositions(display)[line++], tempStr);
     if (lastMeasurement.variant.health_metrics.has_heart_bpm) {
         char heartStr[32];
         snprintf(heartStr, sizeof(heartStr), "Heart Rate: %u bpm", lastMeasurement.variant.health_metrics.heart_bpm);
-        display->drawString(x, y += _fontHeight(FONT_SMALL), heartStr);
+        display->drawString(x, graphics::getTextPositions(display)[line++], heartStr);
     }
     if (lastMeasurement.variant.health_metrics.has_spO2) {
         char spo2Str[32];
         snprintf(spo2Str, sizeof(spo2Str), "spO2: %u %%", lastMeasurement.variant.health_metrics.spO2);
-        display->drawString(x, y += _fontHeight(FONT_SMALL), spo2Str);
+        display->drawString(x, graphics::getTextPositions(display)[line++], spo2Str);
     }
+    graphics::drawCommonFooter(display, x, y);
 }
 
 bool HealthTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_Telemetry *t)

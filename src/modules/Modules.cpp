@@ -194,6 +194,9 @@ void setupModules()
 #endif
 #endif
 #if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_POWER_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+    LOG_INFO("PowerTelemetry check: has_telemetry=%d, power_measurement=%d, power_screen=%d",
+             moduleConfig.has_telemetry, moduleConfig.telemetry.power_measurement_enabled,
+             moduleConfig.telemetry.power_screen_enabled);
     if (moduleConfig.has_telemetry &&
         (moduleConfig.telemetry.power_measurement_enabled || moduleConfig.telemetry.power_screen_enabled)) {
         new PowerTelemetryModule();

@@ -861,6 +861,63 @@ void Power::readPowerStatus()
         hasBattery = batteryLevel->isBatteryConnect() ? OptTrue : OptFalse;
         usbPowered = batteryLevel->isVbusIn() ? OptTrue : OptFalse;
         isChargingNow = batteryLevel->isCharging() ? OptTrue : OptFalse;
+
+#if defined(HAS_PPM) && HAS_PPM
+        // Charger/fuel gauge diagnostics with short, separate lock windows.
+        // Split out of isCharging() to avoid starving I2C pollers (touch, buttons).
+        if (PPM) {
+            // Charger diagnostics - only when USB present but not charging (throttled to 5 min)
+            {
+                concurrency::LockGuard guard(i2cLock);
+                if (!PPM->isCharging() && PPM->isVbusIn()) {
+                    static uint32_t lastNotChargingLog = 0;
+                    uint32_t now = millis();
+                    if ((lastNotChargingLog == 0) || (now - lastNotChargingLog > 300000)) {
+                        lastNotChargingLog = now;
+                        uint8_t faults = PPM->getFaultStatus();
+                        LOG_WARN("BQ25896 not charging: status=%s, bus=%s, NTC=%s, chargeEn=%d, HIZ=%d, VINDPM=%d, "
+                                 "faults=0x%02x (chg=%u), VBUS=%umV, VBAT=%umV",
+                                 PPM->getChargeStatusString(), PPM->getBusStatusString(),
+                                 PPM->getNTCStatusString(), PPM->isEnableCharge(), PPM->isHizMode(),
+                                 PPM->isDynamicPowerManagement(),
+                                 (unsigned)faults, (unsigned)PPM->isChargeFault(),
+                                 (unsigned)PPM->getVbusVoltage(), (unsigned)PPM->getBattVoltage());
+                    }
+                }
+            }
+
+            // Adjust input current limit based on power source (only on change)
+            {
+                concurrency::LockGuard guard(i2cLock);
+                if (PPM->isVbusIn()) {
+                    static uint8_t lastBusStatus = 0xFF;
+                    uint8_t busStatus = PPM->getBusStatus();
+                    if (busStatus != lastBusStatus) {
+                        lastBusStatus = busStatus;
+                        if (busStatus == XPowersPPM::BUS_STATE_ADAPTER) {
+                            PPM->setInputCurrentLimit(1000);
+                            LOG_INFO("Power source: wireless/adapter, input current limited to 1000mA");
+                        } else if (busStatus == XPowersPPM::BUS_STATE_USB_SDP) {
+                            PPM->setInputCurrentLimit(2000);
+                            LOG_INFO("Power source: USB, input current limited to 2000mA");
+                        }
+                    }
+                }
+            }
+        }
+#endif
+
+#if defined(HAS_BQ27220) && HAS_BQ27220
+        // Fuel gauge diagnostics - getBQ27220Telemetry() acquires i2cLock internally
+        {
+            BQ27220TelemetryData td = getBQ27220Telemetry();
+            if (td.valid) {
+                LOG_INFO("BQ27220: %d mA avg, %u mV, %d mAh remaining",
+                         (int)td.averageCurrent, (unsigned)td.voltage, (int)td.remainingCapacity);
+            }
+        }
+#endif
+
         if (hasBattery) {
             batteryVoltageMv = batteryLevel->getBattVoltage();
             // If the AXP192 returns a valid battery percentage, use it
@@ -1436,14 +1493,59 @@ class LipoCharger : public HasBatteryLevel
                 result = PPM->init(Wire, I2C_SDA, I2C_SCL, BQ25896_ADDR);
                 if (result) {
                     LOG_INFO("PPM BQ25896 init succeeded");
-                    // Set the charging target voltage, Range:3840 ~ 4608mV ,step:16 mV
-                    PPM->setChargeTargetVoltage(4288);
-                    // Set the charging current , Range:0~5056mA ,step:64mA
+
+                    // Configuration aligned with LilyGo T5S3 factory firmware defaults.
+                    // BQ25896 datasheet: https://www.ti.com/product/BQ25896
+
+                    // Minimum system voltage before battery disconnect (3.3V)
+                    PPM->setSysPowerDownVoltage(3300);
+
+                    // Use I2C register for input current limit, not the hardware ILIM pin.
+                    // Without this, the actual limit is MIN(I2C setting, ILIM pin), and
+                    // the ILIM pin default depends on PSEL wiring.
+                    PPM->disableCurrentLimitPin();
+
+                    // Input current limit from power source (USB or Qi wireless).
+                    // LilyGo factory sets 3250mA (max). We start conservative at 2000mA
+                    // for USB, and reduce to 1000mA for wireless charging in isCharging().
+                    // Range: 100-3250mA, step 50mA.
+                    PPM->setInputCurrentLimit(2000);
+
+                    // Charge target voltage: 4.208V (matches LilyGo factory default).
+                    // Lower than 4.288V for better battery cycle life on a device that
+                    // may sit idle for long periods. Range: 3840-4608mV, step 16mV.
+                    PPM->setChargeTargetVoltage(4208);
+
+                    // Precharge current for deeply discharged batteries.
+                    // Range: 64-1024mA, step 64mA.
+                    PPM->setPrechargeCurr(64);
+
+                    // Fast/constant charge current. 1024mA into 1500mAh battery = 0.68C,
+                    // a moderate rate that balances charge speed and battery longevity.
+                    // Range: 0-3008mA, step 64mA.
                     PPM->setChargerConstantCurr(1024);
-                    // To obtain voltage data, the ADC must be enabled first
+
+                    // ADC must be enabled before reading voltage/current measurements
                     PPM->enableMeasure();
-                    // Turn on charging function
+
+                    // Ensure battery power path is connected. A previous shutdown
+                    // (PWR button long-press) sets BATFET_DIS which persists across
+                    // ESP32 resets when USB keeps the BQ25896 powered.
+                    PPM->enableBatterPowerPath();
+
+                    // Enable charging
                     PPM->enableCharge();
+
+                    // Read and clear fault register (latched, cleared on read)
+                    uint8_t faults = PPM->getFaultStatus();
+
+                    LOG_INFO("BQ25896: chargeStatus=%s, busStatus=%s, NTC=%s, VBUS=%umV, VBAT=%umV, "
+                             "faults=0x%02x (chgFault=%u, wdtFault=%d, batFault=%d)",
+                             PPM->getChargeStatusString(), PPM->getBusStatusString(),
+                             PPM->getNTCStatusString(), (unsigned)PPM->getVbusVoltage(),
+                             (unsigned)PPM->getBattVoltage(), (unsigned)faults,
+                             (unsigned)PPM->isChargeFault(), PPM->isWatchdogFault(),
+                             PPM->isBatteryFault());
                 }
             }
             if (!result) {
@@ -1455,14 +1557,18 @@ class LipoCharger : public HasBatteryLevel
         }
 #ifdef HAS_BQ27220
         if (bq == nullptr) {
-            // Hold I2C lock during BQ27220 operations
+            // BQ27220 has its own microcontroller that takes ~1s to boot after a full
+            // power cycle. Retry the I2C probe a few times with delays.
             concurrency::LockGuard guard(i2cLock);
-            // First check if BQ27220 is present on I2C bus before attempting init
-            // The init() method has no timeout and will hang forever if device doesn't respond
-            Wire.beginTransmission(0x55); // BQ27220 I2C address
-            uint8_t i2cError = Wire.endTransmission();
+            uint8_t i2cError = 1;
+            for (int attempt = 0; attempt < 3 && i2cError != 0; attempt++) {
+                if (attempt > 0)
+                    delay(500);
+                Wire.beginTransmission(0x55); // BQ27220 I2C address
+                i2cError = Wire.endTransmission();
+            }
             if (i2cError != 0) {
-                LOG_WARN("BQ27220 not detected on I2C bus (error %d), skipping fuel gauge init", i2cError);
+                LOG_WARN("BQ27220 not detected on I2C bus after retries (error %d)", i2cError);
                 // Still return true since PPM (charger) is working
                 return true;
             }
@@ -1493,9 +1599,11 @@ class LipoCharger : public HasBatteryLevel
      */
     virtual int getBatteryPercent() override
     {
-        return -1;
-        // return bq->getChargePercent(); // don't use BQ27220 for battery percent,
-        // it is not calibrated
+#ifdef HAS_BQ27220
+        if (bq)
+            return bq->getChargePercent();
+#endif
+        return -1; // fall through to OCV table
     }
 
     /**
@@ -1538,22 +1646,130 @@ class LipoCharger : public HasBatteryLevel
         if (!PPM)
             return false;
         bool charging = PPM->isCharging();
-#ifdef HAS_BQ27220
-        if (bq) {
-            if (charging) {
-                LOG_DEBUG("BQ27220 time to full charge: %d min", bq->getTimeToFull());
-            } else {
-                if (!PPM->isVbusIn()) {
-                    LOG_DEBUG("BQ27220 time to empty: %d min (%d mAh)", bq->getTimeToEmpty(), bq->getRemainingCapacity());
-                }
+
+        if (!charging && PPM->isVbusIn()) {
+            // USB present but not charging - check and fix BATFET
+            int reg09 = PPM->readRegister(POWERS_PPM_REG_09H);
+            bool batfetDis = (reg09 != -1) && (reg09 & (1 << 5));
+            if (batfetDis) {
+                LOG_WARN("BQ25896: BATFET was disconnected, re-enabling battery power path");
+                PPM->enableBatterPowerPath();
             }
         }
-#endif
+
         return charging;
+    }
+
+    /**
+     * Return battery current in mA from BQ27220 fuel gauge.
+     * Positive = charging, negative = discharging.
+     * Returns INT16_MIN if fuel gauge is not available.
+     */
+    int16_t getCurrentMA()
+    {
+#ifdef HAS_BQ27220
+        concurrency::LockGuard guard(i2cLock);
+        if (bq)
+            return bq->getCurrent();
+#endif
+        return INT16_MIN;
+    }
+
+    /**
+     * Get extended BQ27220 telemetry data for power profiling.
+     * Reads multiple registers in one locked I2C session.
+     */
+    BQ27220TelemetryData getTelemetry()
+    {
+        BQ27220TelemetryData td = {};
+        td.valid = false;
+#ifdef HAS_BQ27220
+        concurrency::LockGuard guard(i2cLock);
+        if (bq) {
+            td.instantaneousCurrent = bq->getCurrent();
+            td.averageCurrent = (int16_t)bq->readRegU16(CommandAverageCurrent);
+            td.maxLoadCurrent = (int16_t)bq->readRegU16(CommandMaxLoadCurrent);
+            td.standbyCurrent = (int16_t)bq->readRegU16(CommandStandbyCurrent);
+            td.averagePower = (int16_t)bq->readRegU16(CommandAveragePower);
+            td.remainingCapacity = bq->getRemainingCapacity();
+            td.voltage = bq->getVoltage();
+            td.valid = true;
+        }
+#endif
+        return td;
     }
 };
 
 LipoCharger lipoCharger;
+
+/**
+ * Get battery current from BQ27220 fuel gauge (mA).
+ * Returns INT16_MIN if not available.
+ */
+int16_t getBQ27220CurrentMA()
+{
+#if defined(HAS_PPM) && HAS_PPM
+    return lipoCharger.getCurrentMA();
+#else
+    return INT16_MIN;
+#endif
+}
+
+/**
+ * Get extended BQ27220 telemetry data for power profiling.
+ */
+BQ27220TelemetryData getBQ27220Telemetry()
+{
+#if defined(HAS_PPM) && HAS_PPM
+    return lipoCharger.getTelemetry();
+#else
+    BQ27220TelemetryData td = {};
+    td.valid = false;
+    return td;
+#endif
+}
+
+/**
+ * Get BQ25896 charger system voltage (VSYS) in mV.
+ */
+uint16_t getBQ25896SystemVoltage()
+{
+#if defined(HAS_PPM) && HAS_PPM
+    if (PPM) {
+        concurrency::LockGuard guard(i2cLock);
+        return PPM->getSystemVoltage();
+    }
+#endif
+    return 0;
+}
+
+/**
+ * Get BQ25896 VBUS input voltage in mV.
+ */
+uint16_t getBQ25896VbusVoltage()
+{
+#if defined(HAS_PPM) && HAS_PPM
+    if (PPM) {
+        concurrency::LockGuard guard(i2cLock);
+        return PPM->getVbusVoltage();
+    }
+#endif
+    return 0;
+}
+
+/**
+ * Get BQ25896 charge current in mA.
+ */
+uint16_t getBQ25896ChargeCurrent()
+{
+#if defined(HAS_PPM) && HAS_PPM
+    if (PPM) {
+        concurrency::LockGuard guard(i2cLock);
+        return PPM->getChargeCurrent();
+    }
+#endif
+    return 0;
+}
 
 /**
  * Init the Lipo battery charger

@@ -284,6 +284,17 @@
 //   USE_EINK, USE_EINK_EPDIY, EINK_HEIGHT=540, EINK_WIDTH=960
 //   TOUCH_CS=0x5D (GT911 I2C addr), HAS_TOUCHSCREEN=1
 
+// Light sleep chunk duration (seconds).
+// Default is 30s which wakes every 30s to blink an LED we don't have.
+// Set to 300s (matching default ls_secs) so we sleep in one long chunk,
+// waking only on GPIO events (LoRa DIO1, button, touch).
+#define SLEEP_TIME 300
+
+// Enable GT911 touch interrupt (GPIO 3) as a light sleep wake source.
+// Without this, the touch polling thread must run during sleep to detect touches.
+// With this, the ESP32 wakes instantly on touch via GPIO interrupt.
+#define WAKE_ON_TOUCH
+
 // Map LORA_* pins to SX126X_* names expected by RadioLib/main.cpp
 #define SX126X_CS LORA_CS
 #define SX126X_DIO1 LORA_DIO1
@@ -314,8 +325,9 @@
 // E-Paper frontlight enable (directly controllable, active HIGH)
 #define PIN_EINK_EN 11
 
-// Frontlight control - called from Screen::setOn(false) to turn off backlight on sleep
+// Frontlight control - called from Screen::setOn() to save/restore backlight on sleep/wake
 void frontlightOff();
+void frontlightRestore();
 
 // E-Paper ED047TC1 4.7" 960x540
 // Uses 16-bit PARALLEL interface via LCD peripheral (NOT SPI).
@@ -335,6 +347,34 @@ void frontlightOff();
 
 // BQ25896 Power Path Management (charger) + BQ27220 Fuel Gauge
 // I2C bus is shared with epdiy - protected by i2cLock mutex
+//
+// BQ25896 (U9, I2C 0x6B) schematic notes:
+//   ILIM pin (10): R8=0R to GND - no hardware current limit, relies entirely
+//     on I2C register REG00 for input current control. Power-on default is
+//     500mA until firmware programs the register.
+//   CE pin (9): via R25=10K
+//   NTC pin (11): R9=30.1K bias resistor for thermistor monitoring
+//   QON pin (12): R20=5.23K for long-press shutdown timing
+//
+// BQ27220 (U10, I2C 0x55) schematic notes:
+//   SRP/SRN: R36=10mR (0.01R) sense resistor in series with VBAT
+//   BIN: R34=10K to GND
+//   GPOUT: R38=10K pullup to VDD3V3
+//
+// Power Telemetry Channel Layout (when power_measurement_enabled):
+//   Ch1 (Bat): Battery voltage (BQ27220 mV) + average current mA (reg 0x14, rolling avg)
+//   Ch2 (Sys): VSYS voltage (BQ25896 ADC) + instantaneous current mA (BQ27220 reg 0x0C)
+//   Ch3 (USB): VBUS voltage (BQ25896 ADC) + per-interval peak current mA (software-tracked)
+//
+// Notes:
+//   - BQ27220 measures battery current only (in-series sense resistor R36).
+//     When USB-powered with full battery, current reads ~0 mA.
+//   - Per-interval peak: each runOnce() cycle samples instantaneous current and
+//     tracks the maximum magnitude. The peak is reported at each telemetry send
+//     and then reset to the current instantaneous value.
+//   - Serial log also shows: average power (mW), standby current (mA),
+//     remaining capacity (mAh) from BQ27220 registers.
+//   - BQ25896 provides no input current (IBUS) measurement via XPowersLib.
 #define HAS_PPM 1
 #define XPOWERS_CHIP_BQ25896
 #define HAS_BQ27220 1

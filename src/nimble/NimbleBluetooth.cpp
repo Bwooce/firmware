@@ -385,6 +385,26 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
         LOG_INFO("BLE requestLowerPowerConnection");
         bleServer->updateConnParams(conn_handle, 24, 40, 2, 600);
     }
+
+    void requestUltraLowPowerConnection(uint16_t conn_handle)
+    {
+        /* Request ultra-low power BLE connection for idle/screen-off state.
+
+        Activated when PowerFSM enters DARK state (screen off, no user interaction).
+        Reverted to requestLowerPowerConnection when screen turns on.
+
+        Selected settings:
+            minInterval (units of 1.25ms): 100ms = 80
+            maxInterval (units of 1.25ms): 500ms = 400
+            latency: 3 (skip up to 3 events, effective idle interval = 500ms * 4 = 2000ms)
+            timeout (units of 10ms): 5 seconds = 500
+
+        Apple constraint: timeout >= (1 + latency) * maxInterval * 2
+            5000ms >= (1 + 3) * 500ms * 2 = 4000ms. OK.
+        */
+        LOG_INFO("BLE requestUltraLowPowerConnection");
+        bleServer->updateConnParams(conn_handle, 80, 400, 3, 500);
+    }
 };
 
 static BluetoothPhoneAPI *bluetoothPhoneAPI;
@@ -739,10 +759,12 @@ static NimbleBluetoothFromRadioCallback *fromRadioCallbacks;
 
 void NimbleBluetooth::shutdown()
 {
-    // No measurable power saving for ESP32 during light-sleep(?)
-#ifndef ARCH_ESP32
-    // Shutdown bluetooth for minimum power draw
-    LOG_INFO("Disable bluetooth");
+    // Stop BLE advertising for power saving (reversible, unlike deinit)
+    LOG_INFO("Stop BLE advertising");
+#ifdef NIMBLE_TWO
+    NimBLEExtAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
+    pAdvertising->stop(0);
+#else
     NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->reset();
     pAdvertising->stop();
@@ -990,5 +1012,23 @@ void clearNVS()
 #ifdef ARCH_ESP32
     ESP.restart();
 #endif
+}
+
+void setBluetoothIdleMode(bool idle)
+{
+    if (!bleServer || !nimbleBluetooth || !nimbleBluetooth->isConnected())
+        return;
+
+    uint16_t conn_handle = nimbleBluetoothConnHandle.load();
+    if (conn_handle == BLE_HS_CONN_HANDLE_NONE)
+        return;
+
+    if (idle) {
+        LOG_INFO("BLE requestUltraLowPowerConnection");
+        bleServer->updateConnParams(conn_handle, 80, 400, 3, 500);
+    } else {
+        LOG_INFO("BLE requestLowerPowerConnection");
+        bleServer->updateConnParams(conn_handle, 24, 40, 2, 600);
+    }
 }
 #endif

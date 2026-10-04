@@ -79,6 +79,11 @@ void setBluetoothEnable(bool enable)
     // not needed
 }
 
+void setBluetoothIdleMode(bool idle)
+{
+    // not needed
+}
+
 void updateBatteryLevel(uint8_t level)
 {
     // not needed

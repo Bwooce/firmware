@@ -49,6 +49,7 @@ int32_t PowerTelemetryModule::runOnce()
 
     if (!(moduleConfig.telemetry.power_measurement_enabled)) {
         // If this module is not enabled, and the user doesn't want the display screen don't waste any OSThread time on it
+        LOG_INFO("Power Telemetry: measurement not enabled, disabling module thread");
         return disable();
     }
 
@@ -75,10 +76,27 @@ int32_t PowerTelemetryModule::runOnce()
                 result = ina3221Sensor.isInitialized() ? 0 : ina3221Sensor.runOnce();
             if (max17048Sensor.hasSensor())
                 result = max17048Sensor.isInitialized() ? 0 : max17048Sensor.runOnce();
+#if defined(HAS_BQ27220) && HAS_BQ27220
+            // BQ27220 fuel gauge is initialized by Power module, not here.
+            // Just signal that we have a valid sensor source.
+            if (result == UINT32_MAX) {
+                BQ27220TelemetryData td = getBQ27220Telemetry();
+                if (td.valid) {
+                    LOG_INFO("Power Telemetry: BQ27220 available (cur=%d mA, avgCur=%d mA, maxLoad=%d mA)",
+                             (int)td.instantaneousCurrent, (int)td.averageCurrent, (int)td.maxLoadCurrent);
+                    result = 0;
+                } else {
+                    LOG_WARN("Power Telemetry: BQ27220 fuel gauge not available");
+                }
+            }
+#endif
         }
 
         // it's possible to have this module enabled, only for displaying values on the screen.
         // therefore, we should only enable the sensor loop if measurement is also enabled
+        if (result == UINT32_MAX) {
+            LOG_WARN("Power Telemetry: no sensor sources found, disabling");
+        }
         return result == UINT32_MAX ? disable() : setStartDelay();
 #else
         return disable();
@@ -87,6 +105,16 @@ int32_t PowerTelemetryModule::runOnce()
         // if we somehow got to a second run of this module with measurement disabled, then just wait forever
         if (!moduleConfig.telemetry.power_measurement_enabled)
             return disable();
+
+#if defined(HAS_BQ27220) && HAS_BQ27220
+        // Sample instantaneous current each cycle to track per-interval peak
+        int16_t cur = getBQ27220CurrentMA();
+        if (cur != INT16_MIN) {
+            // Track max magnitude (discharge is negative, so use abs comparison)
+            if (abs(cur) > abs(intervalMaxCurrent))
+                intervalMaxCurrent = cur;
+        }
+#endif
 
         if (((lastSentToMesh == 0) || !Throttle::isWithinTimespanMs(lastSentToMesh, sendToMeshIntervalMs)) &&
             airTime->isTxAllowedAirUtil()) {
@@ -147,23 +175,22 @@ void PowerTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *s
 
     // Display current and voltage based on ...power_metrics.has_[channel/voltage/current]... flags
     const auto &m = lastMeasurement.variant.power_metrics;
-    int lineY = textSecondLine;
+    const int *textPositions = graphics::getTextPositions(display);
 
     auto drawLine = [&](const char *label, float voltage, float current) {
         char lineStr[64];
         snprintf(lineStr, sizeof(lineStr), "%s: %.2fV %.0fmA", label, voltage, current);
-        display->drawString(x, lineY, lineStr);
-        lineY += _fontHeight(FONT_SMALL);
+        display->drawString(x, textPositions[line++], lineStr);
     };
 
     if (m.has_ch1_voltage || m.has_ch1_current) {
-        drawLine("Ch1", m.ch1_voltage, m.ch1_current);
+        drawLine("Bat", m.ch1_voltage, m.ch1_current);
     }
     if (m.has_ch2_voltage || m.has_ch2_current) {
-        drawLine("Ch2", m.ch2_voltage, m.ch2_current);
+        drawLine("Sys", m.ch2_voltage, m.ch2_current);
     }
     if (m.has_ch3_voltage || m.has_ch3_current) {
-        drawLine("Ch3", m.ch3_voltage, m.ch3_current);
+        drawLine("USB", m.ch3_voltage, m.ch3_current);
     }
     graphics::drawCommonFooter(display, x, y);
 }
@@ -211,6 +238,53 @@ bool PowerTelemetryModule::getPowerTelemetry(meshtastic_Telemetry *m)
         valid = max17048Sensor.getMetrics(m);
 #endif
 
+#if defined(HAS_BQ27220) && HAS_BQ27220
+    // BQ27220 fuel gauge: extended power telemetry
+    // Ch1: Battery V + average current (mA) - key power profiling metric
+    // Ch2: VSYS V (BQ25896) + instantaneous current (mA)
+    // Ch3: VBUS V (BQ25896) + peak current this interval (software tracked)
+    if (!m->variant.power_metrics.has_ch1_voltage) {
+        BQ27220TelemetryData td = getBQ27220Telemetry();
+        if (td.valid) {
+            float battV = td.voltage / 1000.0f;
+
+            // Ch1: Battery voltage + average current
+            m->variant.power_metrics.has_ch1_voltage = true;
+            m->variant.power_metrics.ch1_voltage = battV;
+            m->variant.power_metrics.has_ch1_current = true;
+            m->variant.power_metrics.ch1_current = (float)td.averageCurrent;
+
+            // Ch2: VSYS voltage (BQ25896) + instantaneous current (BQ27220)
+            uint16_t vsys = getBQ25896SystemVoltage();
+            if (vsys > 0) {
+                m->variant.power_metrics.has_ch2_voltage = true;
+                m->variant.power_metrics.ch2_voltage = vsys / 1000.0f;
+            }
+            m->variant.power_metrics.has_ch2_current = true;
+            m->variant.power_metrics.ch2_current = (float)td.instantaneousCurrent;
+
+            // Ch3: VBUS voltage (BQ25896) + per-interval peak current (software tracked)
+            uint16_t vbus = getBQ25896VbusVoltage();
+            if (vbus > 0) {
+                m->variant.power_metrics.has_ch3_voltage = true;
+                m->variant.power_metrics.ch3_voltage = vbus / 1000.0f;
+            }
+            m->variant.power_metrics.has_ch3_current = true;
+            m->variant.power_metrics.ch3_current = (float)intervalMaxCurrent;
+
+            LOG_INFO("Power profiling: avgCur=%d mA, avgPwr=%d mW, peakCur=%d mA, "
+                     "standbyCur=%d mA, remaining=%u mAh",
+                     (int)td.averageCurrent, (int)td.averagePower, (int)intervalMaxCurrent,
+                     (int)td.standbyCurrent, (unsigned)td.remainingCapacity);
+
+            // Reset per-interval peak tracker
+            intervalMaxCurrent = td.instantaneousCurrent;
+
+            valid = true;
+        }
+    }
+#endif
+
     return valid;
 }
 
@@ -249,10 +323,10 @@ bool PowerTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
     m.which_variant = meshtastic_Telemetry_power_metrics_tag;
     m.time = getTime();
     if (getPowerTelemetry(&m)) {
-        LOG_INFO("Send: ch1_voltage=%f, ch1_current=%f, ch2_voltage=%f, ch2_current=%f, "
-                 "ch3_voltage=%f, ch3_current=%f",
-                 m.variant.power_metrics.ch1_voltage, m.variant.power_metrics.ch1_current, m.variant.power_metrics.ch2_voltage,
-                 m.variant.power_metrics.ch2_current, m.variant.power_metrics.ch3_voltage, m.variant.power_metrics.ch3_current);
+        LOG_INFO("Send: ch1(bat)=%.2fV/%.0fmA ch2(sys)=%.2fV/%.0fmA ch3(usb)=%.2fV/%.0fmA",
+                 m.variant.power_metrics.ch1_voltage, m.variant.power_metrics.ch1_current,
+                 m.variant.power_metrics.ch2_voltage, m.variant.power_metrics.ch2_current,
+                 m.variant.power_metrics.ch3_voltage, m.variant.power_metrics.ch3_current);
 
         sensor_read_error_count = 0;
 

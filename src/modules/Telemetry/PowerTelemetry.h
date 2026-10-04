@@ -54,6 +54,7 @@ class PowerTelemetryModule : private concurrency::OSThread, public ProtobufModul
     uint32_t lastSentToMesh = 0;
     uint32_t lastSentToPhone = 0;
     uint32_t sensor_read_error_count = 0;
+    int16_t intervalMaxCurrent = 0; // Peak instantaneous current (mA) since last telemetry send
 };
 
 #endif

@@ -213,9 +213,14 @@ void setBluetoothEnable(bool enable)
         nrf52Bluetooth->shutdown();
     }
 }
+void setBluetoothIdleMode(bool idle)
+{
+    // not implemented for NRF52
+}
 #else
 #warning NRF52 "Bluetooth disable" workaround does not apply to builds with MESHTASTIC_EXCLUDE_BLUETOOTH
 void setBluetoothEnable(bool enable) {}
+void setBluetoothIdleMode(bool idle) {}
 #endif
 /**
  * Override printf to use the SEGGER output library (note - this does not effect the printf method on the debug console)

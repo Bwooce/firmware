@@ -167,6 +167,7 @@ class GPS : private concurrency::OSThread
     // via optional feature "custom fields", currently disabled (bug #525)
     TinyGPSCustom gsafixtype; // custom extract fix type from GPGSA
     TinyGPSCustom gsapdop;    // custom extract PDOP from GPGSA
+    TinyGPSCustom gsavdop;    // custom extract VDOP from GPGSA
     uint8_t fixType = 0;      // fix type from GPGSA
 #endif
 

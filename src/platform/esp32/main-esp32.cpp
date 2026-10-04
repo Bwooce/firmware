@@ -46,14 +46,21 @@ void setBluetoothEnable(bool enable)
         if (enable && !nimbleBluetooth->isActive()) {
             powerMon->setState(meshtastic_PowerMon_State_BT_On);
             nimbleBluetooth->setup();
+        } else if (enable && nimbleBluetooth->isActive()) {
+            // Restart advertising after shutdown() paused it (e.g. light sleep exit)
+            powerMon->setState(meshtastic_PowerMon_State_BT_On);
+            nimbleBluetooth->startAdvertising();
+        } else if (!enable && nimbleBluetooth->isActive()) {
+            // Stop advertising for power saving (reversible, unlike deinit)
+            nimbleBluetooth->shutdown();
+            powerMon->clearState(meshtastic_PowerMon_State_BT_On);
         }
-        // For ESP32, no way to recover from bluetooth shutdown without reboot
-        // BLE advertising automatically stops when MCU enters light-sleep(?)
         // For deep-sleep, shutdown hardware with nimbleBluetooth->deinit(). Requires reboot to reverse
     }
 }
 #else
 void setBluetoothEnable(bool enable) {}
+void setBluetoothIdleMode(bool idle) {}
 void updateBatteryLevel(uint8_t level) {}
 #endif
 

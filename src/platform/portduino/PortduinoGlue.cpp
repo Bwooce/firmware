@@ -49,6 +49,11 @@ void setBluetoothEnable(bool enable)
     // not needed
 }
 
+void setBluetoothIdleMode(bool idle)
+{
+    // not needed
+}
+
 void cpuDeepSleep(uint32_t msecs)
 {
     notImplemented("cpuDeepSleep");

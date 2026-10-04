@@ -859,7 +859,9 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c)
         config.bluetooth = c.payload_variant.bluetooth;
         break;
     case meshtastic_Config_security_tag:
-        LOG_INFO("Set config: Security");
+        LOG_INFO("Set config: Security (serial_enabled: %d->%d, debug_log_api: %d->%d)",
+                 config.security.serial_enabled, c.payload_variant.security.serial_enabled,
+                 config.security.debug_log_api_enabled, c.payload_variant.security.debug_log_api_enabled);
         config.security = c.payload_variant.security;
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN) && !(MESHTASTIC_EXCLUDE_PKI)
         // If the client set the key to blank, go ahead and regenerate so long as we're not in ham mode

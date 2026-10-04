@@ -841,6 +841,9 @@ void GPS::setPowerState(GPSPowerState newState, uint32_t sleepTime)
         setPowerPMU(true);                                        // Power (PMU): on
         writePinStandby(false);                                   // Standby (pin): awake (not standby)
         setPowerUBLOX(true);                                      // Standby (UBLOX): awake
+        // MTK chips: wake from PMTK225 backup mode (any serial data wakes, but explicit full-power cmd is cleaner)
+        if (IS_ONE_OF(gnssModel, GNSS_MODEL_MTK, GNSS_MODEL_MTK_L76B, GNSS_MODEL_MTK_PA1010D, GNSS_MODEL_MTK_PA1616S))
+            _serial_gps->write("$PMTK225,0*2B\r\n");
         break;
 
     case GPS_SOFTSLEEP:
@@ -849,10 +852,16 @@ void GPS::setPowerState(GPSPowerState newState, uint32_t sleepTime)
         setPowerPMU(true);                                          // Power (PMU): on
         writePinStandby(true);                                      // Standby (pin): asleep (not awake)
         setPowerUBLOX(false, sleepTime);                            // Standby (UBLOX): asleep, timed
+        // MTK chips: enter backup mode via serial command (wakes on any serial data)
+        if (IS_ONE_OF(gnssModel, GNSS_MODEL_MTK, GNSS_MODEL_MTK_L76B, GNSS_MODEL_MTK_PA1010D, GNSS_MODEL_MTK_PA1616S))
+            _serial_gps->write("$PMTK225,4*2F\r\n");
         break;
 
     case GPS_HARDSLEEP:
         powerMon->clearState(meshtastic_PowerMon_State_GPS_Active); // Report change for power monitoring (during testing)
+        // MTK chips: enter backup mode before power off (in case EN pin is not connected)
+        if (IS_ONE_OF(gnssModel, GNSS_MODEL_MTK, GNSS_MODEL_MTK_L76B, GNSS_MODEL_MTK_PA1010D, GNSS_MODEL_MTK_PA1616S))
+            _serial_gps->write("$PMTK225,4*2F\r\n");
         writePinEN(false);                                          // Power (EN pin): off
         setPowerPMU(false);                                         // Power (PMU): off
         writePinStandby(true);                                      // Standby (pin): asleep (not awake)
@@ -865,6 +874,9 @@ void GPS::setPowerState(GPSPowerState newState, uint32_t sleepTime)
     case GPS_OFF:
         assert(sleepTime == 0);                                     // This is an indefinite sleep
         powerMon->clearState(meshtastic_PowerMon_State_GPS_Active); // Report change for power monitoring (during testing)
+        // MTK chips: enter backup mode before power off (in case EN pin is not connected)
+        if (IS_ONE_OF(gnssModel, GNSS_MODEL_MTK, GNSS_MODEL_MTK_L76B, GNSS_MODEL_MTK_PA1010D, GNSS_MODEL_MTK_PA1616S))
+            _serial_gps->write("$PMTK225,4*2F\r\n");
         writePinEN(false);                                          // Power (EN pin): off
         setPowerPMU(false);                                         // Power (PMU): off
         writePinStandby(true);                                      // Standby (pin): asleep
@@ -1041,6 +1053,9 @@ void GPS::down()
 #endif
         // U-blox is supported via PMREQ
         if (IS_ONE_OF(gnssModel, GNSS_MODEL_UBLOX6, GNSS_MODEL_UBLOX7, GNSS_MODEL_UBLOX8, GNSS_MODEL_UBLOX9, GNSS_MODEL_UBLOX10))
+            softsleepSupported = true;
+        // MTK chips support PMTK225 backup mode via serial (no standby pin needed)
+        if (IS_ONE_OF(gnssModel, GNSS_MODEL_MTK, GNSS_MODEL_MTK_L76B, GNSS_MODEL_MTK_PA1010D, GNSS_MODEL_MTK_PA1616S))
             softsleepSupported = true;
 
         if (softsleepSupported) {
@@ -1590,7 +1605,8 @@ GPS *GPS::createGps()
     // see NMEAGPS.h
     gsafixtype.begin(reader, NMEA_MSG_GXGSA, 2);
     gsapdop.begin(reader, NMEA_MSG_GXGSA, 15);
-    LOG_DEBUG("Use " NMEA_MSG_GXGSA " for 3DFIX and PDOP");
+    gsavdop.begin(reader, NMEA_MSG_GXGSA, 17);
+    LOG_DEBUG("Use " NMEA_MSG_GXGSA " for 3DFIX, PDOP and VDOP");
 #endif
 
     // Make sure the GPS is awake before performing any init.
@@ -1762,11 +1778,13 @@ bool GPS::lookForLocation()
 #ifndef TINYGPS_OPTION_NO_CUSTOM_FIELDS
     p.HDOP = reader.hdop.value();
     p.PDOP = TinyGPSPlus::parseDecimal(gsapdop.value());
+    p.VDOP = TinyGPSPlus::parseDecimal(gsavdop.value());
 #else
     // FIXME! naive PDOP emulation (assumes VDOP==HDOP)
     // correct formula is PDOP = SQRT(HDOP^2 + VDOP^2)
     p.HDOP = reader.hdop.value();
     p.PDOP = 1.41 * reader.hdop.value();
+    p.VDOP = reader.hdop.value(); // no GSA data, assume VDOP ~ HDOP
 #endif
 
     // Discard incomplete or erroneous readings
@@ -1775,12 +1793,29 @@ bool GPS::lookForLocation()
         return false;
     }
 
+    // Horizontal position is always accepted (HDOP inaccuracy is tolerable
+    // for mesh networking where privacy fuzzing adds error anyway).
     p.latitude_i = toDegInt(loc.lat);
     p.longitude_i = toDegInt(loc.lng);
 
-    p.altitude_geoidal_separation = reader.geoidHeight.meters();
-    p.altitude_hae = reader.altitude.meters() + p.altitude_geoidal_separation;
-    p.altitude = reader.altitude.meters();
+    // Altitude is only set when vertical accuracy is acceptable.
+    // VDOP: <2 excellent, 2-5 good, 5-10 moderate, >10 poor.
+    // DOP values are in hundredths (e.g., 300 = VDOP 3.0).
+#ifndef GPS_VDOP_MAX
+#define GPS_VDOP_MAX 500
+#endif
+    if (p.VDOP > 0 && p.VDOP > GPS_VDOP_MAX) {
+        LOG_WARN("VDOP %.1f exceeds threshold %.1f, altitude discarded (sats=%d, alt=%dm)",
+                 p.VDOP / 100.0, GPS_VDOP_MAX / 100.0, reader.satellites.value(), (int)reader.altitude.meters());
+        // Keep lat/lon but zero out altitude fields so stale data isn't used
+        p.altitude = 0;
+        p.altitude_hae = 0;
+        p.altitude_geoidal_separation = 0;
+    } else {
+        p.altitude_geoidal_separation = reader.geoidHeight.meters();
+        p.altitude_hae = reader.altitude.meters() + p.altitude_geoidal_separation;
+        p.altitude = reader.altitude.meters();
+    }
 
     p.fix_quality = fixQual;
 #ifndef TINYGPS_OPTION_NO_CUSTOM_FIELDS

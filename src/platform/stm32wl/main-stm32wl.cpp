@@ -4,6 +4,7 @@
 #include <stm32wlxx_hal.h>
 
 void setBluetoothEnable(bool enable) {}
+void setBluetoothIdleMode(bool idle) {}
 
 void playStartMelody() {}
 
